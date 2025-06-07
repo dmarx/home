@@ -10,12 +10,19 @@ title: "🚧 dmarx home  - Under Construction 🚧"
 * [Old Blog](https://dmarx.github.io/posts/) - Content will be migrated here in the future, and this site will replace the old blog as my default github landing page.
 * [Benchwarmers](https://github.com/dmarx/bench-warmers) - My public brainstorming space. Will almost certainly migrate that here in near future
 
+## social media links
+
+* https://bsky.app/profile/digthatdata.bsky.social
+* https://github.com/dmarx
+* https://www.linkedin.com/in/david-marx-b0a5bb14/
+* https://old.reddit.com/user/digthatdata
+  
 ## todo
 
-- [ ] flesh out basic content
-  - [ ] social links
-  - [ ] about page
-- [ ] non fork repo so i can create issues
+- [x] seed basic content
+  - [x] social links
+  - [x] about page
+- [ ] port reference vault content
 - [ ] old blog migration
   - [x] link to old blog
   - [ ] link old blog here
@@ -24,7 +31,6 @@ title: "🚧 dmarx home  - Under Construction 🚧"
   - [ ] rename this repo to `dmarx.github.io`
 - [ ] port benchwarmers
   - open question: should I straight up move the whole system here, or should I set up some sort of ci/cd build process that pushes update from that repo into this one? Could maybe use git-submodules to link repos and automate upgrading to latest commit?
-- [ ] port reference vault content
-- [ ] create a project highlights page from gh profile
 - [ ] art
+- [ ] non fork repo so i can create issues
 - [ ] customize graph view
