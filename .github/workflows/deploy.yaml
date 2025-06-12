@@ -1,9 +1,10 @@
 name: Deploy Quartz site to GitHub Pages
  
 on:
+  workflow_dispatch:
   push:
     branches:
-      - v4
+      - main
  
 permissions:
   contents: read
