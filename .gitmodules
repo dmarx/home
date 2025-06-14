@@ -1,0 +1,3 @@
+[submodule "content/vault"]
+	path = content/vault
+	url = git@github.com:dmarx/obsidian_vault.git
