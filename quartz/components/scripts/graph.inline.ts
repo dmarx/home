@@ -1,5 +1,6 @@
 import type { ContentDetails } from "../../plugins/emitters/contentIndex"
 import {
+  scaleOrdinal, schemeCategory10, schemeSet3,
   SimulationNodeDatum,
   SimulationLinkDatum,
   Simulation,
@@ -216,18 +217,88 @@ async function renderGraph(graph: HTMLElement, fullSlug: FullSlug) {
     },
     {} as Record<(typeof cssVars)[number], string>,
   )
-
-  // calculate color
-  const color = (d: NodeData) => {
-    const isCurrent = d.id === slug
-    if (isCurrent) {
-      return computedStyleMap["--secondary"]
-    } else if (visited.has(d.id) || d.id.startsWith("tags/")) {
-      return computedStyleMap["--tertiary"]
-    } else {
-      return computedStyleMap["--gray"]
+  
+  // Add this function after the existing color function
+  function createColorClassPalette(nodes) {
+    // Extract all unique colorclass tags from all nodes
+    const colorclassTags = new Set()
+    
+    for (const node of nodes) {
+      if (node.tags) {
+        for (const tag of node.tags) {
+          if (tag.startsWith('colorclass/')) {
+            colorclassTags.add(tag)
+          }
+        }
+      }
+    }
+    
+    const uniqueColorclasses = Array.from(colorclassTags)
+    
+    // Create discrete color scale - use Set3 for more colors, Category10 for fewer
+    const colorScheme = uniqueColorclasses.length <= 10 ? schemeCategory10 : schemeSet3
+    const colorScale = scaleOrdinal(colorScheme).domain(uniqueColorclasses)
+    
+    return colorScale
+  }
+  
+  // Replace the existing color function with this enhanced version
+  function createColorFunction(nodes, slug, visited, computedStyleMap) {
+    const colorClassScale = createColorClassPalette(nodes)
+    
+    return function color(d) {
+      const isCurrent = d.id === slug
+      
+      // Priority 1: Current page gets secondary color
+      if (isCurrent) {
+        return computedStyleMap["--secondary"]
+      }
+      
+      // Priority 2: Check for colorclass tags
+      if (d.tags) {
+        const colorclassTag = d.tags.find(tag => tag.startsWith('root/'))
+        if (colorclassTag) {
+          return colorClassScale(colorclassTag)
+        }
+      }
+      
+      // Priority 3: Fallback to original logic
+      if (visited.has(d.id) || d.id.startsWith("tags/")) {
+        return computedStyleMap["--tertiary"]
+      } else {
+        return computedStyleMap["--gray"]
+      }
     }
   }
+  
+  // In the main renderGraph function, replace this section:
+  // OLD CODE:
+  // const color = (d: NodeData) => {
+  //   const isCurrent = d.id === slug
+  //   if (isCurrent) {
+  //     return computedStyleMap["--secondary"]
+  //   } else if (visited.has(d.id) || d.id.startsWith("tags/")) {
+  //     return computedStyleMap["--tertiary"]
+  //   } else {
+  //     return computedStyleMap["--gray"]
+  //   }
+  // }
+  
+  // NEW CODE:
+  const color = createColorFunction(graphData.nodes, slug, visited, computedStyleMap)
+  
+  // Example usage in your Obsidian documents:
+  // ---
+  // tags: ['physics', 'colorclass/science', 'advanced']
+  // ---
+  // # Quantum Mechanics
+  // This document will be colored according to the 'colorclass/science' tag
+  
+  // ---  
+  // tags: ['programming', 'colorclass/tech', 'javascript']
+  // ---
+  // # Graph Visualization
+  // This document will be colored according to the 'colorclass/tech' tag
 
   function nodeRadius(d: NodeData) {
     const numLinks = graphData.links.filter(
