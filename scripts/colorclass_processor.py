@@ -9,6 +9,7 @@ import networkx as nx
 from collections import Counter
 import numpy as np
 import sys
+import random
 
 from karateclub import LabelPropagation
 
