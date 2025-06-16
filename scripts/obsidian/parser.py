@@ -51,7 +51,7 @@ class ObsDoc:
         if 'title' in self.frontmatter:
             self.title = self.frontmatter['title']
         self.links = clean_links(get_wikilinks(self.body))
-        self.tags = self.frontmatter.get('tags')
+        self.tags = self.frontmatter.get('tags',[])
         self.fpath=fpath
 
     @property
