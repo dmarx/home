@@ -18,6 +18,97 @@ sys.path.insert(0, str(script_dir))
 from obsidian import ObsDoc, build_graph, load_corpus
 
 
+
+class SemiSupervisedLabelPropagation:
+    """Modified Label Propagation that supports initial seed labels."""
+    
+    def __init__(self, seed: int = 42, iterations: int = 100):
+        self.seed = seed
+        self.iterations = iterations
+        
+    def _set_seed(self):
+        """Set random seed for reproducibility."""
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        
+    def _make_a_pick(self, neighbors, unlabeled_value=-1):
+        """Choose a label from neighboring nodes, ignoring unlabeled ones."""
+        scores = {}
+        for neighbor in neighbors:
+            neighbor_label = self._labels[neighbor]
+            # Skip unlabeled neighbors
+            if neighbor_label == unlabeled_value:
+                continue
+            if neighbor_label in scores:
+                scores[neighbor_label] += 1
+            else:
+                scores[neighbor_label] = 1
+        
+        # If no labeled neighbors, return unlabeled
+        if not scores:
+            return unlabeled_value
+            
+        # Return most common label (random tie-breaking)
+        max_score = max(scores.values())
+        top_labels = [label for label, score in scores.items() if score == max_score]
+        return random.choice(top_labels)
+    
+    def _do_a_propagation(self, unlabeled_value=-1):
+        """Do one round of label propagation, only updating unlabeled nodes."""
+        # Shuffle nodes for randomness
+        nodes_to_update = [node for node in self._nodes if self._labels[node] == unlabeled_value]
+        random.shuffle(nodes_to_update)
+        
+        new_labels = self._labels.copy()
+        
+        for node in nodes_to_update:
+            neighbors = list(nx.neighbors(self._graph, node))
+            if neighbors:  # Only update if node has neighbors
+                pick = self._make_a_pick(neighbors, unlabeled_value)
+                new_labels[node] = pick
+                
+        self._labels = new_labels
+    
+    def fit(self, graph: nx.Graph, initial_labels: Dict[int, int] | None = None):
+        """Fit label propagation with optional initial seed labels.
+        
+        Args:
+            graph: NetworkX graph to cluster
+            initial_labels: Dict mapping node IDs to initial labels.
+                           Nodes not in dict are considered unlabeled.
+        """
+        self._set_seed()
+        self._graph = graph
+        self._nodes = list(self._graph.nodes())
+        
+        # Initialize labels
+        unlabeled_value = -1
+        if initial_labels:
+            self._labels = {node: initial_labels.get(node, unlabeled_value) 
+                          for node in self._nodes}
+        else:
+            # Original behavior: all nodes get unique labels
+            self._labels = {node: i for i, node in enumerate(self._nodes)}
+        
+        # Run propagation iterations
+        for iteration in range(self.iterations):
+            old_labels = self._labels.copy()
+            self._do_a_propagation(unlabeled_value)
+            
+            # Check for convergence (no changes in unlabeled nodes)
+            changes = sum(1 for node in self._nodes 
+                         if old_labels[node] != self._labels[node] 
+                         and old_labels[node] == unlabeled_value)
+            
+            if changes == 0:
+                logger.debug(f"Label propagation converged after {iteration + 1} iterations")
+                break
+                
+    def get_memberships(self) -> Dict[int, int]:
+        """Get cluster membership of nodes."""
+        return self._labels.copy()
+
+
 class ColorclassProcessor:
     """Processes Obsidian vault to add unique colorclass tags with label propagation."""
     
@@ -36,7 +127,7 @@ class ColorclassProcessor:
                 'enabled': True,
                 'max_iterations': 100,
                 'min_connections': 2,  # Minimum connections to receive propagated label
-                'propagation_strength': 0.7  # How much weight to give to neighbor labels
+                'seed': 42  # Random seed for reproducibility
             }
         })
         
@@ -124,7 +215,7 @@ class ColorclassProcessor:
         return assignments
     
     def _propagate_labels(self, corpus: list[ObsDoc], seed_assignments: dict[str, str]) -> dict[str, str]:
-        """Use label propagation to spread colorclass tags to connected nodes."""
+        """Use modified label propagation to spread colorclass tags to connected nodes."""
         logger.info("Starting label propagation...")
         
         # Build graph from corpus
@@ -150,18 +241,18 @@ class ColorclassProcessor:
         node_to_id = {node: i for i, node in enumerate(undirected_graph.nodes)}
         id_to_node = {i: node for node, i in node_to_id.items()}
         
-        # Convert NetworkX graph to integer-indexed graph for karateclub
+        # Convert NetworkX graph to integer-indexed graph
         edges = [(node_to_id[u], node_to_id[v]) for u, v in undirected_graph.edges]
-        karate_graph = nx.Graph()
-        karate_graph.add_nodes_from(range(len(node_to_id)))
-        karate_graph.add_edges_from(edges)
+        indexed_graph = nx.Graph()
+        indexed_graph.add_nodes_from(range(len(node_to_id)))
+        indexed_graph.add_edges_from(edges)
         
-        # Prepare initial labels (-1 for unlabeled, unique IDs for labeled)
-        initial_labels = np.full(len(node_to_id), -1, dtype=int)
+        # Prepare initial labels for seed nodes
+        initial_labels = {}
         label_to_colorclass = {}
         next_label_id = 0
         
-        # Assign labels to seed nodes
+        # Assign integer labels to seed nodes
         for node_name, colorclass_tag in seed_assignments.items():
             if node_name in node_to_id:
                 initial_labels[node_to_id[node_name]] = next_label_id
@@ -170,11 +261,14 @@ class ColorclassProcessor:
         
         # Run label propagation
         try:
-            model = LabelPropagation()
-            model.fit(karate_graph, initial_labels)
+            model = SemiSupervisedLabelPropagation(
+                seed=self.config.label_propagation.seed,
+                iterations=self.config.label_propagation.max_iterations
+            )
+            model.fit(indexed_graph, initial_labels)
             predicted_labels = model.get_memberships()
             
-            logger.info(f"Label propagation completed with {len(set(predicted_labels))} communities")
+            logger.info(f"Label propagation completed")
             
         except Exception as e:
             logger.error(f"Label propagation failed: {e}")
@@ -184,13 +278,13 @@ class ColorclassProcessor:
         propagated_assignments = {}
         min_connections = self.config.label_propagation.min_connections
         
-        for node_id, predicted_label in enumerate(predicted_labels):
+        for node_id, predicted_label in predicted_labels.items():
             node_name = id_to_node[node_id]
             
-            # Skip if already has seed assignment
-            if node_name in seed_assignments:
+            # Skip if already has seed assignment or is unlabeled
+            if node_name in seed_assignments or predicted_label == -1:
                 continue
-                
+            
             # Skip if predicted label is unknown
             if predicted_label not in label_to_colorclass:
                 continue
