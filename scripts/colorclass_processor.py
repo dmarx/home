@@ -172,7 +172,18 @@ class ColorclassProcessor:
         logger.info(f"Dry run: {dry_run}")
         
         # Load all documents
-        corpus = load_corpus(vault_path)
+        _corpus = load_corpus(vault_path)
+
+        # prune cruft
+        # WARNING: this deletes content.
+        corpus = []
+        for doc in _corpus:
+            if any(['prune' in tag for tag in doc.tags]):
+                Path(doc.fpath).unlink() 
+                logger.warning(f"Pruned {doc.title}")
+                continue
+            else:
+                corpus.append(doc)
         
         # Phase 1: Add colorclass tags to source articles
         seed_assignments = self._add_seed_colorclass_tags(corpus, source_tag)
