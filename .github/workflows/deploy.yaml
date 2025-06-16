@@ -34,7 +34,7 @@ jobs:
         id: process
         run: |
           pip install networkx pyyaml omegaconf loguru fire
-          python -m scripts.colorclass_processor
+          python -m scripts.colorclass_processor process_vault content --source-tag 'sod/root'
       
       - uses: actions/setup-node@v4
         with:
