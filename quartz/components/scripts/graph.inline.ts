@@ -256,7 +256,7 @@ async function renderGraph(graph: HTMLElement, fullSlug: FullSlug) {
       
       // Priority 2: Check for colorclass tags
       if (d.tags) {
-        const colorclassTag = d.tags.find(tag => tag.startsWith('root/'))
+        const colorclassTag = d.tags.find(tag => tag.startsWith('sod/root'))
         if (colorclassTag) {
           return colorClassScale(colorclassTag)
         }
