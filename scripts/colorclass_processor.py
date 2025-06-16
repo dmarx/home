@@ -104,7 +104,7 @@ class SemiSupervisedLabelPropagation:
                 logger.debug(f"Label propagation converged after {iteration + 1} iterations")
                 break
                 
-    def get_memberships(self) -> Dict[int, int]:
+    def get_memberships(self) -> dict[int, int]:
         """Get cluster membership of nodes."""
         return self._labels.copy()
 
