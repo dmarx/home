@@ -33,7 +33,7 @@ jobs:
       - name: Run colorclass processor
         id: process
         run: |
-          pip install llamero networkx
+          pip install llamero networkx pyyaml
           python -m scripts.colorclass_processor
       
       - uses: actions/setup-node@v4
