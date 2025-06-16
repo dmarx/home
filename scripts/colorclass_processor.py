@@ -332,7 +332,8 @@ class ColorclassProcessor:
         Returns:
             True if file was modified, False otherwise
         """
-        file_path = vault_path / f"{doc.title}.md"
+        file_path = doc.fpath if doc.fpath else vault_path / f"{doc.title}.md"
+        #file_path = vault_path / f"{doc.title}.md"
         
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
