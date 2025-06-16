@@ -22,7 +22,29 @@ class ColorclassProcessor:
     
     def __init__(self, config_path: str | None = None):
         """Initialize processor with optional config file."""
-        self.config = self._load_config(config_path)
+        #self.config = self._load_config(config_path)
+        self.config = """
+# config/colorclass.yaml - Configuration for colorclass tag processor
+
+# Source tag to search for in documents
+source_tag: "sod/root"
+
+# Prefix for generated colorclass tags  
+colorclass_prefix: "colorclass"
+
+# Whether to run in dry-run mode (show changes without modifying files)
+dry_run: false
+
+# Whether to backup original files before modification
+backup_originals: false
+
+# Optional: Override vault path (useful for CI)
+# vault_path: "/path/to/vault"
+
+# Optional: Custom tag mappings for special cases
+# custom_mappings:
+#   "Special Article": "colorclass/special-override"
+        """.strip()
     
     def _load_config(self, config_path: str | None) -> dict:
         """Load configuration from YAML file or use defaults."""
