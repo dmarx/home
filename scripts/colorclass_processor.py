@@ -178,7 +178,7 @@ class ColorclassProcessor:
         # WARNING: this deletes content.
         corpus = []
         for doc in _corpus:
-            if any(['prune' in tag for tag in doc.tags]):
+            if doc.tags and any(['prune' in tag for tag in doc.tags]):
                 Path(doc.fpath).unlink() 
                 logger.warning(f"Pruned {doc.title}")
                 continue
