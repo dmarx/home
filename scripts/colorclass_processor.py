@@ -69,7 +69,7 @@ class SemiSupervisedLabelPropagation:
                 
         self._labels = new_labels
     
-    def fit(self, graph: nx.Graph, initial_labels: Dict[int, int] | None = None):
+    def fit(self, graph: nx.Graph, initial_labels: dict[int, int] | None = None):
         """Fit label propagation with optional initial seed labels.
         
         Args:
