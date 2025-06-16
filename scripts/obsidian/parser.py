@@ -52,6 +52,7 @@ class ObsDoc:
             self.title = self.frontmatter['title']
         self.links = clean_links(get_wikilinks(self.body))
         self.tags = self.frontmatter.get('tags')
+        self.fpath=fpath
 
     @property
     def node_name(self) -> str:
