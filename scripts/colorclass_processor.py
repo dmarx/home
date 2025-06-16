@@ -376,7 +376,7 @@ class ColorclassProcessor:
             # Remove existing colorclass tag if present
             frontmatter['tags'] = [
                 tag for tag in frontmatter['tags'] 
-                if not tag.startswith(f"{self.config.colorclass_prefix}/")
+                if (tag is not None) and (not tag.startswith(f"{self.config.colorclass_prefix}/"))
             ]
             
             # Add new colorclass tag
