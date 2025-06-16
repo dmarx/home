@@ -26,12 +26,12 @@ class ColorclassProcessor:
     
     def _load_config(self, config_path: str | None) -> dict:
         """Load configuration from YAML file or use defaults."""
-        default_config = {
+        default_config = OmegaConf.create({
             'source_tag': 'sod/root',
             'colorclass_prefix': 'colorclass',
             'dry_run': False,
             'backup_originals': True
-        }
+        })
         
         if config_path:
             config_path = Path(config_path)
