@@ -91,12 +91,10 @@ class ColorclassProcessor:
         
         # Phase 2: Label propagation (if enabled)
         all_assignments = seed_assignments.copy()
-        if enable_propagation and HAS_KARATECLUB:
+        if enable_propagation:
             propagated_assignments = self._propagate_labels(corpus, seed_assignments)
             all_assignments.update(propagated_assignments)
             logger.info(f"Label propagation added {len(propagated_assignments)} new assignments")
-        elif enable_propagation and not HAS_KARATECLUB:
-            logger.warning("Label propagation requested but karateclub not available")
         
         # Phase 3: Apply changes to files
         if not dry_run:
