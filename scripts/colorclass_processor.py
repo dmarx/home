@@ -14,7 +14,7 @@ sys.path.insert(0, str(script_dir))
 
 
 
-from obsidian.parser import ObsDoc, load_corpus
+from obsidian import ObsDoc, load_corpus
 
 
 class ColorclassProcessor:
