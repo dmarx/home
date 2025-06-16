@@ -23,6 +23,19 @@ jobs:
         with:
           fetch-depth: 0 # Fetch all history for git info
           submodules: true # populate vault content
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          #cache: 'pip'
+          
+      - name: Run colorclass processor
+        id: process
+        run: |
+          pip install llamero networkx
+          python -m scripts.colorclass_processor
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 22
