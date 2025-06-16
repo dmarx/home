@@ -132,13 +132,13 @@ class ColorclassProcessor:
             }
         })
         
-        if config_path:
-            config_path = Path(config_path)
-            if config_path.exists():
-                file_config = OmegaConf.load(config_path)
-                return OmegaConf.merge(default_config, file_config)
-            else:
-                logger.warning(f"Config file not found: {config_path}, using defaults")
+        # if config_path:
+        #     config_path = Path(config_path)
+        #     if config_path.exists():
+        #         file_config = OmegaConf.load(config_path)
+        #         return OmegaConf.merge(default_config, file_config)
+        #     else:
+        #         logger.warning(f"Config file not found: {config_path}, using defaults")
         
         return default_config
     
