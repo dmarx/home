@@ -10,8 +10,8 @@ import sys
 
 # install local tools
 script_dir = Path(__file__).parent
-subdir_path = script_dir / "obsidian"
-sys.path.insert(0, str(subdir_path))
+sys.path.insert(0, str(script_dir))
+
 
 
 from obsidian.parser import ObsDoc, load_corpus
