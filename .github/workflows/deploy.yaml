@@ -27,13 +27,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
           #cache: 'pip'
           
       - name: Run colorclass processor
         id: process
         run: |
-          pip install networkx pyyaml omegaconf loguru fire
+          pip install networkx pyyaml omegaconf loguru fire karateclub
           python -m scripts.colorclass_processor process_vault content/vault --source-tag 'sod/root'
       
       - uses: actions/setup-node@v4

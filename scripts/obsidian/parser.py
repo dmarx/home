@@ -44,12 +44,15 @@ def clean_links(wikilinks: list[str], collect_aliases: bool = False) -> list[str
 class ObsDoc:
     """Represents a single Obsidian document."""
     
-    def __init__(self, title: str, raw: str):
+    def __init__(self, title: str, raw: str, fpath: Path | str | None = None):
         self.title = title
         self.raw = raw
         self.frontmatter, self.body = extract_frontmatter(raw)
+        if 'title' in self.frontmatter:
+            self.title = self.frontmatter['title']
         self.links = clean_links(get_wikilinks(self.body))
-        self.tags = self.frontmatter.get('tags')
+        self.tags = self.frontmatter.get('tags',[])
+        self.fpath=fpath
 
     @property
     def node_name(self) -> str:
@@ -62,7 +65,7 @@ class ObsDoc:
         fpath = Path(fpath)
         with fpath.open() as f:
             try:
-                return cls(fpath.stem, f.read())
+                return cls(fpath.stem, f.read(), fpath=fpath)
             except Exception as e:
                 print(fpath)
                 raise e
