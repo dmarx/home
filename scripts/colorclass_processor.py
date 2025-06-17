@@ -11,11 +11,10 @@ import numpy as np
 import sys
 import random
 
-# Import community detection algorithms from karateclub
+# Import community detection algorithms from karateclub (excluding louvain/leiden)
 from karateclub import (
-    LabelPropagation, Louvain, LeidenAlgorithm, EgoNetSplitter,
-    SCD, GEMSEC, BigClam, DANMF, NNSED, MNMF, ClusterONE,
-    OverlappingCommunityDetection, CommunityDetection
+    LabelPropagation, EgoNetSplitter, SCD, GEMSEC, BigClam, 
+    DANMF, NNSED, MNMF, ClusterONE
 )
 
 script_dir = Path(__file__).parent
@@ -28,10 +27,13 @@ class ColorclassProcessor:
     """Processes Obsidian vault to add unique colorclass tags with community detection."""
     
     # Available community detection algorithms
-    AVAILABLE_ALGORITHMS = {
+    NETWORKX_ALGORITHMS = {
+        'louvain': 'louvain_communities',
+        'leiden': 'leiden_communities',
+    }
+    
+    KARATECLUB_ALGORITHMS = {
         'label_propagation': LabelPropagation,
-        'louvain': Louvain,
-        'leiden': LeidenAlgorithm,
         'ego_net_splitter': EgoNetSplitter,
         'scd': SCD,
         'gemsec': GEMSEC,
@@ -49,7 +51,6 @@ class ColorclassProcessor:
     def _load_config(self, config_path: str | None) -> dict:
         """Load configuration from YAML file or use defaults."""
         default_config = OmegaConf.create({
-            'source_tag': 'sod/root',  # Now used for filtering documents, not seeds
             'colorclass_prefix': 'colorclass',
             'dry_run': False,
             'backup_originals': True,
@@ -57,11 +58,12 @@ class ColorclassProcessor:
                 'algorithm': 'louvain',  # Default algorithm
                 'algorithm_params': {    # Parameters passed to the algorithm
                     'seed': 42,
-                    'resolution': 1.0    # For algorithms that support it
+                    'resolution': 1.0,   # For louvain/leiden
+                    'threshold': 1e-07,  # For leiden
+                    'max_comm_size': 0,  # For leiden (0 = no limit)
                 },
                 'min_community_size': 2,  # Minimum size for a community to get colorclass
-                'filter_by_source_tag': False,  # Whether to only cluster documents with source_tag
-                'naming_scheme': 'largest_node',  # 'cluster_id', 'largest_node', or 'sequential'
+                'naming_scheme': 'cluster_id',  # 'cluster_id', 'largest_node', or 'sequential'
             }
         })
         
@@ -77,12 +79,11 @@ class ColorclassProcessor:
     
     def list_algorithms(self) -> list[str]:
         """List available community detection algorithms."""
-        return list(self.AVAILABLE_ALGORITHMS.keys())
+        return list(self.NETWORKX_ALGORITHMS.keys()) + list(self.KARATECLUB_ALGORITHMS.keys())
     
     def process_vault(
         self,
         vault_path: str,
-        source_tag: str | None = None,
         dry_run: bool | None = None,
         algorithm: str | None = None
     ) -> dict[str, str]:
@@ -90,7 +91,6 @@ class ColorclassProcessor:
         
         Args:
             vault_path: Path to Obsidian vault directory
-            source_tag: Tag to filter documents (overrides config)
             dry_run: If True, show what would be changed without modifying files
             algorithm: Community detection algorithm to use (overrides config)
             
@@ -98,16 +98,15 @@ class ColorclassProcessor:
             Dictionary mapping article names to their assigned colorclass tags
         """
         vault_path = Path(vault_path)
-        source_tag = source_tag or self.config.source_tag
         dry_run = dry_run if dry_run is not None else self.config.dry_run
         algorithm = algorithm or self.config.community_detection.algorithm
         
-        if algorithm not in self.AVAILABLE_ALGORITHMS:
-            raise ValueError(f"Unknown algorithm: {algorithm}. Available: {self.list_algorithms()}")
+        all_algorithms = list(self.NETWORKX_ALGORITHMS.keys()) + list(self.KARATECLUB_ALGORITHMS.keys())
+        if algorithm not in all_algorithms:
+            raise ValueError(f"Unknown algorithm: {algorithm}. Available: {all_algorithms}")
         
         logger.info(f"Processing vault: {vault_path}")
         logger.info(f"Algorithm: {algorithm}")
-        logger.info(f"Source tag filter: {source_tag}")
         logger.info(f"Dry run: {dry_run}")
         
         # Load all documents
@@ -124,22 +123,8 @@ class ColorclassProcessor:
             else:
                 corpus.append(doc)
         
-        # # Filter documents if configured
-        # if self.config.community_detection.filter_by_source_tag:
-        #     filtered_corpus = []
-        #     for doc in corpus:
-        #         if doc.tags and source_tag in doc.tags:
-        #             filtered_corpus.append(doc)
-        #     logger.info(f"Filtered to {len(filtered_corpus)} documents with tag '{source_tag}'")
-        #     clustering_corpus = filtered_corpus
-        # else:
-        #     clustering_corpus = corpus
-        
-        
-        clustering_corpus = corpus
-        
-        # Run community detection
-        assignments = self._detect_communities(clustering_corpus, algorithm)
+        # Run community detection on all documents
+        assignments = self._detect_communities(corpus, algorithm)
         
         if not assignments:
             logger.warning("No community assignments generated")
@@ -174,24 +159,81 @@ class ColorclassProcessor:
             logger.warning("Graph too small for community detection")
             return {}
         
-        # Convert to undirected for most algorithms
+        # Convert to undirected for algorithms
         undirected_graph = subgraph.to_undirected()
         
-        # Create mapping from node names to integer IDs
-        node_to_id = {node: i for i, node in enumerate(undirected_graph.nodes)}
-        id_to_node = {i: node for node, i in node_to_id.items()}
+        # Run algorithm based on type
+        if algorithm in self.NETWORKX_ALGORITHMS:
+            communities = self._run_networkx_algorithm(undirected_graph, algorithm)
+        else:
+            communities = self._run_karateclub_algorithm(undirected_graph, algorithm)
         
-        # Convert NetworkX graph to integer-indexed graph
-        edges = [(node_to_id[u], node_to_id[v]) for u, v in undirected_graph.edges]
-        indexed_graph = nx.Graph()
-        indexed_graph.add_nodes_from(range(len(node_to_id)))
-        indexed_graph.add_edges_from(edges)
+        if not communities:
+            logger.error("Community detection failed to produce results")
+            return {}
         
-        # Initialize and run the selected algorithm
+        # Process community assignments
+        assignments = self._process_communities(communities, undirected_graph)
+        
+        return assignments
+    
+    def _run_networkx_algorithm(self, graph: nx.Graph, algorithm: str) -> list[set]:
+        """Run NetworkX community detection algorithm."""
         try:
-            algorithm_class = self.AVAILABLE_ALGORITHMS[algorithm]
+            params = dict(self.config.community_detection.algorithm_params)
             
-            # Get algorithm parameters from config
+            if algorithm == 'louvain':
+                # NetworkX louvain_communities parameters
+                nx_params = {}
+                if 'seed' in params:
+                    nx_params['seed'] = params['seed']
+                if 'resolution' in params:
+                    nx_params['resolution'] = params['resolution']
+                
+                logger.info(f"Running NetworkX Louvain with parameters: {nx_params}")
+                communities = nx.algorithms.community.louvain_communities(graph, **nx_params)
+                
+            elif algorithm == 'leiden':
+                # Check if Leiden is available in this NetworkX version
+                if hasattr(nx.algorithms.community, 'leiden_communities'):
+                    nx_params = {}
+                    if 'seed' in params:
+                        nx_params['seed'] = params['seed']
+                    if 'resolution' in params:
+                        nx_params['resolution'] = params['resolution']
+                    if 'threshold' in params:
+                        nx_params['threshold'] = params['threshold']
+                    if 'max_comm_size' in params and params['max_comm_size'] > 0:
+                        nx_params['max_comm_size'] = params['max_comm_size']
+                    
+                    logger.info(f"Running NetworkX Leiden with parameters: {nx_params}")
+                    communities = nx.algorithms.community.leiden_communities(graph, **nx_params)
+                else:
+                    logger.error("Leiden algorithm not available in this NetworkX version")
+                    return []
+            
+            logger.info(f"NetworkX {algorithm} found {len(communities)} communities")
+            return list(communities)
+            
+        except Exception as e:
+            logger.error(f"NetworkX {algorithm} failed: {e}")
+            return []
+    
+    def _run_karateclub_algorithm(self, graph: nx.Graph, algorithm: str) -> list[list]:
+        """Run karateclub community detection algorithm."""
+        try:
+            # Create mapping from node names to integer IDs
+            node_to_id = {node: i for i, node in enumerate(graph.nodes)}
+            id_to_node = {i: node for node, i in node_to_id.items()}
+            
+            # Convert NetworkX graph to integer-indexed graph
+            edges = [(node_to_id[u], node_to_id[v]) for u, v in graph.edges]
+            indexed_graph = nx.Graph()
+            indexed_graph.add_nodes_from(range(len(node_to_id)))
+            indexed_graph.add_edges_from(edges)
+            
+            # Initialize and run the selected algorithm
+            algorithm_class = self.KARATECLUB_ALGORITHMS[algorithm]
             params = dict(self.config.community_detection.algorithm_params)
             
             # Filter parameters that the algorithm actually accepts
@@ -202,7 +244,7 @@ class ColorclassProcessor:
                 if key in algorithm_signature.parameters
             }
             
-            logger.info(f"Using algorithm parameters: {valid_params}")
+            logger.info(f"Running karateclub {algorithm} with parameters: {valid_params}")
             model = algorithm_class(**valid_params)
             
             # Fit the model
@@ -217,37 +259,29 @@ class ColorclassProcessor:
             else:
                 raise AttributeError(f"Algorithm {algorithm} doesn't have expected output method")
             
-            logger.info(f"Community detection completed with {algorithm}")
+            # Convert back to node names and group by community
+            communities_dict = {}
+            for node_id, community_id in memberships.items():
+                if community_id not in communities_dict:
+                    communities_dict[community_id] = []
+                communities_dict[community_id].append(id_to_node[node_id])
+            
+            communities = list(communities_dict.values())
+            logger.info(f"Karateclub {algorithm} found {len(communities)} communities")
+            return communities
             
         except Exception as e:
-            logger.error(f"Community detection failed: {e}")
-            return {}
-        
-        # Process community assignments
-        assignments = self._process_memberships(memberships, id_to_node, undirected_graph)
-        
-        return assignments
+            logger.error(f"Karateclub {algorithm} failed: {e}")
+            return []
     
-    def _process_memberships(
-        self, 
-        memberships: dict[int, int], 
-        id_to_node: dict[int, str],
-        graph: nx.Graph
-    ) -> dict[str, str]:
-        """Process community memberships into colorclass assignments."""
-        # Group nodes by community
-        communities = {}
-        for node_id, community_id in memberships.items():
-            if community_id not in communities:
-                communities[community_id] = []
-            communities[community_id].append(id_to_node[node_id])
-        
+    def _process_communities(self, communities: list, graph: nx.Graph) -> dict[str, str]:
+        """Process communities into colorclass assignments."""
         # Filter communities by minimum size
         min_size = self.config.community_detection.min_community_size
-        filtered_communities = {
-            comm_id: nodes for comm_id, nodes in communities.items() 
-            if len(nodes) >= min_size
-        }
+        filtered_communities = [
+            community for community in communities 
+            if len(community) >= min_size
+        ]
         
         logger.info(f"Found {len(communities)} communities, {len(filtered_communities)} after size filtering")
         
@@ -255,17 +289,16 @@ class ColorclassProcessor:
         assignments = {}
         naming_scheme = self.config.community_detection.naming_scheme
         
-        if naming_scheme == 'cluster_id':
-            # Use community ID as colorclass name
-            for comm_id, nodes in filtered_communities.items():
-                colorclass_tag = f"{self.config.colorclass_prefix}/cluster_{comm_id}"
-                for node in nodes:
-                    assignments[node] = colorclass_tag
-                    
-        elif naming_scheme == 'largest_node':
-            # Use the node with highest degree as colorclass name
-            for comm_id, nodes in filtered_communities.items():
-                # Find node with highest degree in community
+        for i, community in enumerate(filtered_communities):
+            # Convert community to list if it's a set (from NetworkX)
+            nodes = list(community)
+            
+            if naming_scheme == 'cluster_id':
+                # Use community index as colorclass name
+                colorclass_tag = f"{self.config.colorclass_prefix}/cluster_{i}"
+                
+            elif naming_scheme == 'largest_node':
+                # Use the node with highest degree as colorclass name
                 max_degree = -1
                 representative_node = nodes[0]
                 for node in nodes:
@@ -275,24 +308,19 @@ class ColorclassProcessor:
                         representative_node = node
                 
                 colorclass_tag = f"{self.config.colorclass_prefix}/{representative_node}"
-                for node in nodes:
-                    assignments[node] = colorclass_tag
-                    
-        elif naming_scheme == 'sequential':
-            # Use sequential numbering
-            for i, (comm_id, nodes) in enumerate(filtered_communities.items()):
+                
+            elif naming_scheme == 'sequential':
+                # Use sequential numbering
                 colorclass_tag = f"{self.config.colorclass_prefix}/community_{i+1}"
-                for node in nodes:
-                    assignments[node] = colorclass_tag
-        
-        else:
-            raise ValueError(f"Unknown naming scheme: {naming_scheme}")
-        
-        # Log assignments
-        for comm_id, nodes in filtered_communities.items():
-            sample_node = nodes[0]
-            colorclass_tag = assignments[sample_node]
-            logger.info(f"Community {comm_id} ({len(nodes)} nodes) → {colorclass_tag}")
+            
+            else:
+                raise ValueError(f"Unknown naming scheme: {naming_scheme}")
+            
+            # Assign colorclass to all nodes in community
+            for node in nodes:
+                assignments[node] = colorclass_tag
+            
+            logger.info(f"Community {i} ({len(nodes)} nodes) → {colorclass_tag}")
             
         return assignments
     
@@ -407,7 +435,8 @@ class ColorclassProcessor:
         vault_path = Path(vault_path)
         algorithm = algorithm or self.config.community_detection.algorithm
         
-        if algorithm not in self.AVAILABLE_ALGORITHMS:
+        all_algorithms = list(self.NETWORKX_ALGORITHMS.keys()) + list(self.KARATECLUB_ALGORITHMS.keys())
+        if algorithm not in all_algorithms:
             raise ValueError(f"Unknown algorithm: {algorithm}")
         
         logger.info(f"Analyzing community structure with algorithm: {algorithm}")
@@ -422,46 +451,23 @@ class ColorclassProcessor:
         if len(subgraph.nodes) < 2:
             return {'error': 'Graph too small for analysis'}
         
-        # Create integer-indexed graph
-        node_to_id = {node: i for i, node in enumerate(subgraph.nodes)}
-        id_to_node = {i: node for node, i in node_to_id.items()}
-        
-        edges = [(node_to_id[u], node_to_id[v]) for u, v in subgraph.edges]
-        indexed_graph = nx.Graph()
-        indexed_graph.add_nodes_from(range(len(node_to_id)))
-        indexed_graph.add_edges_from(edges)
-        
         # Run community detection
         try:
-            algorithm_class = self.AVAILABLE_ALGORITHMS[algorithm]
-            params = dict(self.config.community_detection.algorithm_params)
-            
-            # Filter valid parameters
-            import inspect
-            algorithm_signature = inspect.signature(algorithm_class.__init__)
-            valid_params = {
-                key: value for key, value in params.items() 
-                if key in algorithm_signature.parameters
-            }
-            
-            model = algorithm_class(**valid_params)
-            model.fit(indexed_graph)
-            memberships = model.get_memberships()
-            
+            if algorithm in self.NETWORKX_ALGORITHMS:
+                communities = self._run_networkx_algorithm(subgraph, algorithm)
+            else:
+                communities = self._run_karateclub_algorithm(subgraph, algorithm)
+                
+            if not communities:
+                return {'error': 'Community detection failed'}
+                
         except Exception as e:
             return {'error': f'Community detection failed: {e}'}
         
-        # Analyze results
-        communities = {}
-        for node_id, community_id in memberships.items():
-            if community_id not in communities:
-                communities[community_id] = []
-            communities[community_id].append(id_to_node[node_id])
-        
         # Calculate statistics
-        community_sizes = [len(nodes) for nodes in communities.values()]
+        community_sizes = [len(community) for community in communities]
         min_size = self.config.community_detection.min_community_size
-        valid_communities = [nodes for nodes in communities.values() if len(nodes) >= min_size]
+        valid_communities = [community for community in communities if len(community) >= min_size]
         
         analysis = {
             'total_documents': len(corpus),
@@ -474,9 +480,9 @@ class ColorclassProcessor:
                 'mean': sum(community_sizes) / len(community_sizes) if community_sizes else 0,
                 'sizes': sorted(community_sizes, reverse=True)[:10]  # Top 10 sizes
             },
-            'coverage': len([n for nodes in valid_communities for n in nodes]) / len(existing_nodes) if existing_nodes else 0,
+            'coverage': len([n for community in valid_communities for n in community]) / len(existing_nodes) if existing_nodes else 0,
             'algorithm': algorithm,
-            'parameters': valid_params
+            'algorithm_type': 'networkx' if algorithm in self.NETWORKX_ALGORITHMS else 'karateclub'
         }
         
         logger.info(f"Community analysis: {analysis}")
