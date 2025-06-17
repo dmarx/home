@@ -196,7 +196,7 @@ class ColorclassProcessor:
                 
             elif algorithm == 'leiden':
                 # Check if Leiden is available in this NetworkX version
-                if hasattr(nx.algorithms.community, 'leiden_communities'):
+                if hasattr(nx.community, 'leiden_communities'):
                     nx_params = {}
                     if 'seed' in params:
                         nx_params['seed'] = params['seed']
