@@ -33,7 +33,7 @@ jobs:
       - name: Run colorclass processor
         id: process
         run: |
-          pip install networkx pyyaml omegaconf loguru fire karateclub
+          pip install networkx pyyaml omegaconf loguru fire
           python -m scripts.colorclass_processor process_vault content/vault
       
       - uses: actions/setup-node@v4
