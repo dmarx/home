@@ -14,7 +14,8 @@ import random
 # Import community detection algorithms from karateclub (excluding louvain/leiden)
 from karateclub import (
     LabelPropagation, EgoNetSplitter, SCD, GEMSEC, BigClam, 
-    DANMF, NNSED, MNMF, ClusterONE
+    DANMF, NNSED, MNMF, 
+    #ClusterONE
 )
 
 script_dir = Path(__file__).parent
@@ -41,7 +42,7 @@ class ColorclassProcessor:
         'danmf': DANMF,
         'nnsed': NNSED,
         'mnmf': MNMF,
-        'cluster_one': ClusterONE,
+        #'cluster_one': ClusterONE,
     }
     
     def __init__(self, config_path: str | None = None):
