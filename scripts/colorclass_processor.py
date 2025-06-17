@@ -192,7 +192,7 @@ class ColorclassProcessor:
                     nx_params['resolution'] = params['resolution']
                 
                 logger.info(f"Running NetworkX Louvain with parameters: {nx_params}")
-                communities = nx.algorithms.community.louvain_communities(graph, **nx_params)
+                communities = nx.community.louvain_communities(graph, **nx_params)
                 
             elif algorithm == 'leiden':
                 # Check if Leiden is available in this NetworkX version
@@ -208,7 +208,7 @@ class ColorclassProcessor:
                         nx_params['max_comm_size'] = params['max_comm_size']
                     
                     logger.info(f"Running NetworkX Leiden with parameters: {nx_params}")
-                    communities = nx.algorithms.community.leiden_communities(graph, **nx_params)
+                    communities = nx.community.leiden_communities(graph, **nx_params)
                 else:
                     logger.error("Leiden algorithm not available in this NetworkX version")
                     return []
