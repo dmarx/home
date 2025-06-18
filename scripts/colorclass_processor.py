@@ -1,4 +1,4 @@
-# scripts/colorclass_processor.py - Add unique colorclass tags with label propagation
+# scripts/colorclass_processor.py - Add unique colorclass tags with community detection
 
 from pathlib import Path
 from loguru import logger
@@ -11,107 +11,24 @@ import numpy as np
 import sys
 import random
 
-from karateclub import LabelPropagation
-
 script_dir = Path(__file__).parent
 sys.path.insert(0, str(script_dir))
 
 from obsidian import ObsDoc, build_graph, load_corpus
 
 
-
-class SemiSupervisedLabelPropagation:
-    """Modified Label Propagation that supports initial seed labels."""
-    
-    def __init__(self, seed: int = 42, iterations: int = 100):
-        self.seed = seed
-        self.iterations = iterations
-        
-    def _set_seed(self):
-        """Set random seed for reproducibility."""
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-        
-    def _make_a_pick(self, neighbors, unlabeled_value=-1):
-        """Choose a label from neighboring nodes, ignoring unlabeled ones."""
-        scores = {}
-        for neighbor in neighbors:
-            neighbor_label = self._labels[neighbor]
-            # Skip unlabeled neighbors
-            if neighbor_label == unlabeled_value:
-                continue
-            if neighbor_label in scores:
-                scores[neighbor_label] += 1
-            else:
-                scores[neighbor_label] = 1
-        
-        # If no labeled neighbors, return unlabeled
-        if not scores:
-            return unlabeled_value
-            
-        # Return most common label (random tie-breaking)
-        max_score = max(scores.values())
-        top_labels = [label for label, score in scores.items() if score == max_score]
-        return random.choice(top_labels)
-    
-    def _do_a_propagation(self, unlabeled_value=-1):
-        """Do one round of label propagation, only updating unlabeled nodes."""
-        # Shuffle nodes for randomness
-        nodes_to_update = [node for node in self._nodes if self._labels[node] == unlabeled_value]
-        random.shuffle(nodes_to_update)
-        
-        new_labels = self._labels.copy()
-        
-        for node in nodes_to_update:
-            neighbors = list(nx.neighbors(self._graph, node))
-            if neighbors:  # Only update if node has neighbors
-                pick = self._make_a_pick(neighbors, unlabeled_value)
-                new_labels[node] = pick
-                
-        self._labels = new_labels
-    
-    def fit(self, graph: nx.Graph, initial_labels: dict[int, int] | None = None):
-        """Fit label propagation with optional initial seed labels.
-        
-        Args:
-            graph: NetworkX graph to cluster
-            initial_labels: Dict mapping node IDs to initial labels.
-                           Nodes not in dict are considered unlabeled.
-        """
-        self._set_seed()
-        self._graph = graph
-        self._nodes = list(self._graph.nodes())
-        
-        # Initialize labels
-        unlabeled_value = -1
-        if initial_labels:
-            self._labels = {node: initial_labels.get(node, unlabeled_value) 
-                          for node in self._nodes}
-        else:
-            # Original behavior: all nodes get unique labels
-            self._labels = {node: i for i, node in enumerate(self._nodes)}
-        
-        # Run propagation iterations
-        for iteration in range(self.iterations):
-            old_labels = self._labels.copy()
-            self._do_a_propagation(unlabeled_value)
-            
-            # Check for convergence (no changes in unlabeled nodes)
-            changes = sum(1 for node in self._nodes 
-                         if old_labels[node] != self._labels[node] 
-                         and old_labels[node] == unlabeled_value)
-            
-            if changes == 0:
-                logger.debug(f"Label propagation converged after {iteration + 1} iterations")
-                break
-                
-    def get_memberships(self) -> dict[int, int]:
-        """Get cluster membership of nodes."""
-        return self._labels.copy()
-
-
 class ColorclassProcessor:
-    """Processes Obsidian vault to add unique colorclass tags with label propagation."""
+    """Processes Obsidian vault to add unique colorclass tags with NetworkX community detection."""
+    
+    # Available NetworkX community detection algorithms
+    AVAILABLE_ALGORITHMS = {
+        'louvain': 'louvain_communities',
+        'leiden': 'leiden_communities', 
+        'greedy_modularity': 'greedy_modularity_communities',
+        'girvan_newman': 'girvan_newman',
+        'label_propagation': 'asyn_lpa_communities',
+        'kernighan_lin': 'kernighan_lin_bisection',
+    }
     
     def __init__(self, config_path: str | None = None):
         """Initialize processor with optional config file."""
@@ -120,15 +37,21 @@ class ColorclassProcessor:
     def _load_config(self, config_path: str | None) -> dict:
         """Load configuration from YAML file or use defaults."""
         default_config = OmegaConf.create({
-            'source_tag': 'sod/root',
             'colorclass_prefix': 'colorclass',
             'dry_run': False,
-            'backup_originals': True,
-            'label_propagation': {
-                'enabled': True,
-                'max_iterations': 100,
-                'min_connections': 2,  # Minimum connections to receive propagated label
-                'seed': 42  # Random seed for reproducibility
+            'backup_originals': False,
+            'community_detection': {
+                'algorithm': 'louvain',  # Default algorithm
+                'algorithm_params': {    # Parameters passed to the algorithm
+                    'seed': 42,
+                    'resolution': 1.0,   # For louvain/leiden
+                    'threshold': 1e-07,  # For leiden
+                    'max_comm_size': 0,  # For leiden (0 = no limit)
+                    'weight': None,      # Edge weight attribute name
+                    'max_levels': None,  # For girvan_newman (None = all levels)
+                },
+                'min_community_size': 5,  # Minimum size for a community to get colorclass
+                'naming_scheme': 'largest_node',  # 'cluster_id', 'largest_node', or 'sequential'
             }
         })
         
@@ -142,39 +65,48 @@ class ColorclassProcessor:
         
         return default_config
     
+    def list_algorithms(self) -> list[str]:
+        """List available community detection algorithms."""
+        available = []
+        for algo_name, nx_func_name in self.AVAILABLE_ALGORITHMS.items():
+            if hasattr(nx.community, nx_func_name):
+                available.append(algo_name)
+            else:
+                logger.debug(f"Algorithm {algo_name} ({nx_func_name}) not available in this NetworkX version")
+        return available
+    
     def process_vault(
         self,
         vault_path: str,
-        source_tag: str | None = None,
         dry_run: bool | None = None,
-        enable_propagation: bool | None = None
+        algorithm: str | None = None
     ) -> dict[str, str]:
-        """Process vault to add colorclass tags with optional label propagation.
+        """Process vault to add colorclass tags using community detection.
         
         Args:
             vault_path: Path to Obsidian vault directory
-            source_tag: Tag to search for (overrides config)
             dry_run: If True, show what would be changed without modifying files
-            enable_propagation: Enable label propagation (overrides config)
+            algorithm: Community detection algorithm to use (overrides config)
             
         Returns:
             Dictionary mapping article names to their assigned colorclass tags
         """
         vault_path = Path(vault_path)
-        source_tag = source_tag or self.config.source_tag
         dry_run = dry_run if dry_run is not None else self.config.dry_run
-        enable_propagation = (enable_propagation if enable_propagation is not None 
-                            else self.config.label_propagation.enabled)
+        algorithm = algorithm or self.config.community_detection.algorithm
+        
+        available_algorithms = self.list_algorithms()
+        if algorithm not in available_algorithms:
+            raise ValueError(f"Unknown or unavailable algorithm: {algorithm}. Available: {available_algorithms}")
         
         logger.info(f"Processing vault: {vault_path}")
-        logger.info(f"Source tag: {source_tag}")
-        logger.info(f"Label propagation: {enable_propagation}")
+        logger.info(f"Algorithm: {algorithm}")
         logger.info(f"Dry run: {dry_run}")
         
         # Load all documents
         _corpus = load_corpus(vault_path)
 
-        # prune cruft
+        # Prune cruft
         # WARNING: this deletes content.
         corpus = []
         for doc in _corpus:
@@ -185,50 +117,25 @@ class ColorclassProcessor:
             else:
                 corpus.append(doc)
         
-        # Phase 1: Add colorclass tags to source articles
-        seed_assignments = self._add_seed_colorclass_tags(corpus, source_tag)
+        # Run community detection on all documents
+        assignments = self._detect_communities(corpus, algorithm)
         
-        if not seed_assignments:
-            logger.warning("No seed articles found - skipping label propagation")
+        if not assignments:
+            logger.warning("No community assignments generated")
             return {}
         
-        # Phase 2: Label propagation (if enabled)
-        all_assignments = seed_assignments.copy()
-        if enable_propagation:
-            propagated_assignments = self._propagate_labels(corpus, seed_assignments)
-            all_assignments.update(propagated_assignments)
-            logger.info(f"Label propagation added {len(propagated_assignments)} new assignments")
-        
-        # Phase 3: Apply changes to files
+        # Apply changes to files
         if not dry_run:
-            modified_count = self._apply_assignments(corpus, vault_path, all_assignments)
+            modified_count = self._apply_assignments(corpus, vault_path, assignments)
             logger.success(f"Modified {modified_count} files")
         else:
             logger.info("Dry run complete - no files modified")
         
-        return all_assignments
-    
-    def _add_seed_colorclass_tags(self, corpus: list[ObsDoc], source_tag: str) -> dict[str, str]:
-        """Add colorclass tags to articles with source tag (seed nodes)."""
-        target_docs = []
-        for doc in corpus:
-            if doc.tags and source_tag in doc.tags:
-                target_docs.append(doc)
-        
-        logger.info(f"Found {len(target_docs)} seed documents with tag '{source_tag}'")
-        
-        # Generate unique colorclass assignments for seed articles
-        assignments = {}
-        for doc in target_docs:
-            colorclass_tag = f"{self.config.colorclass_prefix}/{doc.node_name}"
-            assignments[doc.node_name] = colorclass_tag
-            logger.info(f"  Seed: {doc.title} → {colorclass_tag}")
-        
         return assignments
     
-    def _propagate_labels(self, corpus: list[ObsDoc], seed_assignments: dict[str, str]) -> dict[str, str]:
-        """Use modified label propagation to spread colorclass tags to connected nodes."""
-        logger.info("Starting label propagation...")
+    def _detect_communities(self, corpus: list[ObsDoc], algorithm: str) -> dict[str, str]:
+        """Use NetworkX community detection to assign colorclass tags."""
+        logger.info(f"Starting community detection with {algorithm}...")
         
         # Build graph from corpus
         graph = build_graph(corpus)
@@ -240,84 +147,214 @@ class ColorclassProcessor:
                 existing_nodes.append(doc.node_name)
         
         subgraph = graph.subgraph(existing_nodes).copy()
-        logger.info(f"Propagating on subgraph with {len(subgraph.nodes)} nodes, {len(subgraph.edges)} edges")
+        logger.info(f"Clustering subgraph with {len(subgraph.nodes)} nodes, {len(subgraph.edges)} edges")
         
         if len(subgraph.nodes) < 2:
-            logger.warning("Graph too small for label propagation")
+            logger.warning("Graph too small for community detection")
             return {}
         
-        # Convert to undirected for label propagation
+        # Convert to undirected for algorithms
         undirected_graph = subgraph.to_undirected()
         
-        # Create mapping from node names to integer IDs
-        node_to_id = {node: i for i, node in enumerate(undirected_graph.nodes)}
-        id_to_node = {i: node for node, i in node_to_id.items()}
+        # Run the selected algorithm
+        communities = self._run_networkx_algorithm(undirected_graph, algorithm)
         
-        # Convert NetworkX graph to integer-indexed graph
-        edges = [(node_to_id[u], node_to_id[v]) for u, v in undirected_graph.edges]
-        indexed_graph = nx.Graph()
-        indexed_graph.add_nodes_from(range(len(node_to_id)))
-        indexed_graph.add_edges_from(edges)
-        
-        # Prepare initial labels for seed nodes
-        initial_labels = {}
-        label_to_colorclass = {}
-        next_label_id = 0
-        
-        # Assign integer labels to seed nodes
-        for node_name, colorclass_tag in seed_assignments.items():
-            if node_name in node_to_id:
-                initial_labels[node_to_id[node_name]] = next_label_id
-                label_to_colorclass[next_label_id] = colorclass_tag
-                next_label_id += 1
-        
-        # Run label propagation
-        try:
-            model = SemiSupervisedLabelPropagation(
-                seed=self.config.label_propagation.seed,
-                iterations=self.config.label_propagation.max_iterations
-            )
-            model.fit(indexed_graph, initial_labels)
-            predicted_labels = model.get_memberships()
-            
-            logger.info(f"Label propagation completed")
-            
-        except Exception as e:
-            logger.error(f"Label propagation failed: {e}")
+        if not communities:
+            logger.error("Community detection failed to produce results")
             return {}
         
-        # Extract propagated assignments
-        propagated_assignments = {}
-        min_connections = self.config.label_propagation.min_connections
+        # Process community assignments
+        assignments = self._process_communities(communities, undirected_graph)
         
-        for node_id, predicted_label in predicted_labels.items():
-            node_name = id_to_node[node_id]
+        return assignments
+    
+    def _run_networkx_algorithm(self, graph: nx.Graph, algorithm: str) -> list:
+        """Run NetworkX community detection algorithm."""
+        try:
+            params = dict(self.config.community_detection.algorithm_params)
+            nx_func_name = self.AVAILABLE_ALGORITHMS[algorithm]
             
-            # Skip if already has seed assignment or is unlabeled
-            if node_name in seed_assignments or predicted_label == -1:
-                continue
+            if not hasattr(nx.algorithms.community, nx_func_name):
+                logger.error(f"Algorithm {algorithm} ({nx_func_name}) not available in NetworkX")
+                return []
             
-            # Skip if predicted label is unknown
-            if predicted_label not in label_to_colorclass:
-                continue
+            func = getattr(nx.algorithms.community, nx_func_name)
             
-            # Check minimum connections requirement
-            node_degree = undirected_graph.degree(node_name)
-            if node_degree < min_connections:
-                continue
+            # Prepare parameters based on algorithm
+            if algorithm == 'louvain':
+                nx_params = {}
+                if 'seed' in params and params['seed'] is not None:
+                    nx_params['seed'] = params['seed']
+                if 'resolution' in params and params['resolution'] is not None:
+                    nx_params['resolution'] = params['resolution']
+                if 'weight' in params and params['weight'] is not None:
+                    nx_params['weight'] = params['weight']
+                
+                logger.info(f"Running NetworkX Louvain with parameters: {nx_params}")
+                communities = func(graph, **nx_params)
+                
+            elif algorithm == 'leiden':
+                nx_params = {}
+                if 'seed' in params and params['seed'] is not None:
+                    nx_params['seed'] = params['seed']
+                if 'resolution' in params and params['resolution'] is not None:
+                    nx_params['resolution'] = params['resolution']
+                if 'threshold' in params and params['threshold'] is not None:
+                    nx_params['threshold'] = params['threshold']
+                if 'max_comm_size' in params and params['max_comm_size'] is not None and params['max_comm_size'] > 0:
+                    nx_params['max_comm_size'] = params['max_comm_size']
+                
+                logger.info(f"Running NetworkX Leiden with parameters: {nx_params}")
+                communities = func(graph, **nx_params)
+                
+            elif algorithm == 'greedy_modularity':
+                nx_params = {}
+                if 'weight' in params and params['weight'] is not None:
+                    nx_params['weight'] = params['weight']
+                if 'resolution' in params and params['resolution'] is not None:
+                    nx_params['resolution'] = params['resolution']
+                
+                logger.info(f"Running NetworkX Greedy Modularity with parameters: {nx_params}")
+                communities = func(graph, **nx_params)
+                
+            elif algorithm == 'girvan_newman':
+                nx_params = {}
+                if 'weight' in params and params['weight'] is not None:
+                    nx_params['weight'] = params['weight']
+                
+                logger.info(f"Running NetworkX Girvan-Newman with parameters: {nx_params}")
+                # Girvan-Newman returns a generator of community divisions
+                communities_gen = func(graph, **nx_params)
+                
+                # Get the best division (or up to max_levels)
+                max_levels = params.get('max_levels', 10)  # Default to 10 levels
+                if max_levels is None:
+                    max_levels = 10
+                
+                best_communities = None
+                best_modularity = -1
+                
+                for i, division in enumerate(communities_gen):
+                    if i >= max_levels:
+                        break
+                    modularity = nx.algorithms.community.modularity(graph, division)
+                    if modularity > best_modularity:
+                        best_modularity = modularity
+                        best_communities = division
+                
+                communities = best_communities if best_communities else []
+                logger.info(f"Girvan-Newman best modularity: {best_modularity}")
+                
+            elif algorithm == 'label_propagation':
+                nx_params = {}
+                if 'seed' in params and params['seed'] is not None:
+                    nx_params['seed'] = params['seed']
+                if 'weight' in params and params['weight'] is not None:
+                    nx_params['weight'] = params['weight']
+                
+                logger.info(f"Running NetworkX Label Propagation with parameters: {nx_params}")
+                communities = func(graph, **nx_params)
+                
+            elif algorithm == 'kernighan_lin':
+                # This is a bisection algorithm, so we'll apply it recursively
+                logger.info("Running NetworkX Kernighan-Lin (recursive bisection)")
+                communities = self._recursive_kernighan_lin(graph, params)
+                
+            else:
+                logger.error(f"Unknown algorithm implementation: {algorithm}")
+                return []
             
-            # Check if node already has a colorclass tag
-            doc = next((d for d in corpus if d.node_name == node_name), None)
-            if doc and doc.tags:
-                existing_colorclass = any(tag.startswith(f"{self.config.colorclass_prefix}/") 
-                                        for tag in doc.tags)
-                if existing_colorclass:
-                    continue
-            
-            propagated_assignments[node_name] = label_to_colorclass[predicted_label]
-            logger.info(f"  Propagated: {node_name} → {label_to_colorclass[predicted_label]}")
+            if communities:
+                communities_list = list(communities)
+                logger.info(f"NetworkX {algorithm} found {len(communities_list)} communities")
+                return communities_list
+            else:
+                logger.warning(f"NetworkX {algorithm} returned no communities")
+                return []
+                
+        except Exception as e:
+            logger.error(f"NetworkX {algorithm} failed: {e}")
+            return []
+    
+    def _recursive_kernighan_lin(self, graph: nx.Graph, params: dict, max_depth: int = 4) -> list:
+        """Apply Kernighan-Lin bisection recursively to create multiple communities."""
+        communities = []
         
-        return propagated_assignments
+        def bisect_graph(g, depth=0):
+            if len(g.nodes) < 4 or depth >= max_depth:  # Stop if too small or too deep
+                communities.append(set(g.nodes))
+                return
+            
+            try:
+                # Apply Kernighan-Lin bisection
+                partition = nx.algorithms.community.kernighan_lin_bisection(g, seed=params.get('seed'))
+                
+                # If partition is successful and creates meaningful split
+                if len(partition[0]) > 1 and len(partition[1]) > 1:
+                    # Recursively bisect each partition
+                    subgraph1 = g.subgraph(partition[0]).copy()
+                    subgraph2 = g.subgraph(partition[1]).copy()
+                    bisect_graph(subgraph1, depth + 1)
+                    bisect_graph(subgraph2, depth + 1)
+                else:
+                    # Can't split meaningfully, add as single community
+                    communities.append(set(g.nodes))
+            except:
+                # If bisection fails, add as single community
+                communities.append(set(g.nodes))
+        
+        bisect_graph(graph)
+        return communities
+    
+    def _process_communities(self, communities: list, graph: nx.Graph) -> dict[str, str]:
+        """Process communities into colorclass assignments."""
+        # Filter communities by minimum size
+        min_size = self.config.community_detection.min_community_size
+        filtered_communities = [
+            community for community in communities 
+            if len(community) >= min_size
+        ]
+        
+        logger.info(f"Found {len(communities)} communities, {len(filtered_communities)} after size filtering")
+        
+        # Generate colorclass assignments
+        assignments = {}
+        naming_scheme = self.config.community_detection.naming_scheme
+        
+        for i, community in enumerate(filtered_communities):
+            # Convert community to list if it's a set
+            nodes = list(community)
+            
+            if naming_scheme == 'cluster_id':
+                # Use community index as colorclass name
+                colorclass_tag = f"{self.config.colorclass_prefix}/cluster_{i}"
+                
+            elif naming_scheme == 'largest_node':
+                # Use the node with highest degree as colorclass name
+                max_degree = -1
+                representative_node = nodes[0]
+                for node in nodes:
+                    degree = graph.degree(node)
+                    if degree > max_degree:
+                        max_degree = degree
+                        representative_node = node
+                
+                colorclass_tag = f"{self.config.colorclass_prefix}/{representative_node}"
+                
+            elif naming_scheme == 'sequential':
+                # Use sequential numbering
+                colorclass_tag = f"{self.config.colorclass_prefix}/community_{i+1}"
+            
+            else:
+                raise ValueError(f"Unknown naming scheme: {naming_scheme}")
+            
+            # Assign colorclass to all nodes in community
+            for node in nodes:
+                assignments[node] = colorclass_tag
+            
+            logger.info(f"Community {i} ({len(nodes)} nodes) → {colorclass_tag}")
+            
+        return assignments
     
     def _apply_assignments(self, corpus: list[ObsDoc], vault_path: Path, 
                           assignments: dict[str, str]) -> int:
@@ -344,7 +381,6 @@ class ColorclassProcessor:
             True if file was modified, False otherwise
         """
         file_path = doc.fpath if doc.fpath else vault_path / f"{doc.title}.md"
-        #file_path = vault_path / f"{doc.title}.md"
         
         if not file_path.exists():
             logger.error(f"File not found: {file_path}")
@@ -426,52 +462,65 @@ class ColorclassProcessor:
         )
         return f"---\n{frontmatter_yaml}---{body}"
     
-    def analyze_propagation_potential(self, vault_path: str, source_tag: str | None = None) -> dict:
-        """Analyze how many nodes could receive propagated labels."""
+    def analyze_community_structure(self, vault_path: str, algorithm: str | None = None) -> dict:
+        """Analyze community structure that would be detected."""
         vault_path = Path(vault_path)
-        source_tag = source_tag or self.config.source_tag
+        algorithm = algorithm or self.config.community_detection.algorithm
         
-        logger.info(f"Analyzing propagation potential for tag: {source_tag}")
+        available_algorithms = self.list_algorithms()
+        if algorithm not in available_algorithms:
+            raise ValueError(f"Unknown or unavailable algorithm: {algorithm}")
+        
+        logger.info(f"Analyzing community structure with algorithm: {algorithm}")
         
         corpus = load_corpus(vault_path)
         graph = build_graph(corpus)
         
-        # Find seed nodes
-        seed_nodes = set()
-        for doc in corpus:
-            if doc.tags and source_tag in doc.tags:
-                seed_nodes.add(doc.node_name)
+        # Filter to existing documents
+        existing_nodes = [doc.node_name for doc in corpus if doc.node_name in graph.nodes]
+        subgraph = graph.subgraph(existing_nodes).to_undirected()
         
-        # Analyze connectivity
-        undirected = graph.to_undirected()
-        existing_nodes = {doc.node_name for doc in corpus if doc.node_name in graph.nodes}
-        subgraph = undirected.subgraph(existing_nodes)
+        if len(subgraph.nodes) < 2:
+            return {'error': 'Graph too small for analysis'}
         
-        # Find nodes reachable from seeds
-        reachable_nodes = set()
-        for seed in seed_nodes:
-            if seed in subgraph:
-                reachable_nodes.update(nx.single_source_shortest_path_length(subgraph, seed).keys())
+        # Run community detection
+        try:
+            communities = self._run_networkx_algorithm(subgraph, algorithm)
+                
+            if not communities:
+                return {'error': 'Community detection failed'}
+                
+        except Exception as e:
+            return {'error': f'Community detection failed: {e}'}
         
-        # Count potential targets
-        potential_targets = reachable_nodes - seed_nodes
+        # Calculate statistics
+        community_sizes = [len(community) for community in communities]
+        min_size = self.config.community_detection.min_community_size
+        valid_communities = [community for community in communities if len(community) >= min_size]
         
-        # Analyze by degree
-        degree_dist = Counter()
-        for node in potential_targets:
-            degree = subgraph.degree(node)
-            degree_dist[degree] += 1
+        # Calculate modularity for the detected communities
+        try:
+            modularity = nx.algorithms.community.modularity(subgraph, communities)
+        except:
+            modularity = None
         
         analysis = {
             'total_documents': len(corpus),
-            'seed_nodes': len(seed_nodes),
-            'reachable_nodes': len(reachable_nodes),
-            'potential_targets': len(potential_targets),
-            'coverage_ratio': len(reachable_nodes) / len(existing_nodes) if existing_nodes else 0,
-            'degree_distribution': dict(degree_dist.most_common(10))
+            'clustered_documents': len(existing_nodes),
+            'total_communities': len(communities),
+            'valid_communities': len(valid_communities),
+            'modularity': modularity,
+            'community_size_stats': {
+                'min': min(community_sizes) if community_sizes else 0,
+                'max': max(community_sizes) if community_sizes else 0,
+                'mean': sum(community_sizes) / len(community_sizes) if community_sizes else 0,
+                'sizes': sorted(community_sizes, reverse=True)[:10]  # Top 10 sizes
+            },
+            'coverage': len([n for community in valid_communities for n in community]) / len(existing_nodes) if existing_nodes else 0,
+            'algorithm': algorithm
         }
         
-        logger.info(f"Propagation analysis: {analysis}")
+        logger.info(f"Community analysis: {analysis}")
         return analysis
 
 
