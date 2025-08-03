@@ -9,8 +9,6 @@ import { classNames } from "../util/lang"
 export interface CosmographConfig {
   // Simulation settings
   repulsion: number
-  repulsionTheta: number
-  repulsionQuadtreeLevels: number
   linkSpring: number
   linkDistance: number
   friction: number
@@ -19,28 +17,12 @@ export interface CosmographConfig {
   // Rendering settings
   nodeSize: number
   nodeColor: string
-  nodeBorderWidth: number
-  nodeBorderColor: string
   linkColor: string
   linkWidth: number
-  linkArrows: boolean
-  
-  // Interaction settings
-  zoom: boolean
-  disableSimulation: boolean
-  simulationGravity: number
-  simulationCentering: number
-  simulationRepulsion: number
-  simulationLinkSpring: number
-  simulationLinkDistance: number
-  simulationFriction: number
   
   // Display settings
   backgroundColor: string
-  showLabels: boolean
   showDynamicLabels: boolean
-  labelColor: string
-  hoveredNodeLabelColor: string
   
   // Data filtering
   removeTags: string[]
@@ -58,8 +40,6 @@ const defaultOptions: GraphOptions = {
   localGraph: {
     // Simulation physics
     repulsion: 0.5,
-    repulsionTheta: 1.15,
-    repulsionQuadtreeLevels: 12,
     linkSpring: 1.0,
     linkDistance: 10,
     friction: 0.85,
@@ -68,22 +48,12 @@ const defaultOptions: GraphOptions = {
     // Visual appearance
     nodeSize: 4,
     nodeColor: '#8b5cf6',
-    nodeBorderWidth: 1,
-    nodeBorderColor: '#ffffff',
     linkColor: '#64748b',
     linkWidth: 1,
-    linkArrows: false,
-    
-    // Interaction
-    zoom: true,
-    disableSimulation: false,
     
     // Display
     backgroundColor: 'transparent',
-    showLabels: false,
     showDynamicLabels: true,
-    labelColor: '#374151',
-    hoveredNodeLabelColor: '#1f2937',
     
     // Data filtering
     depth: 2,
@@ -94,8 +64,6 @@ const defaultOptions: GraphOptions = {
   globalGraph: {
     // Simulation physics
     repulsion: 0.3,
-    repulsionTheta: 1.15,
-    repulsionQuadtreeLevels: 12,
     linkSpring: 0.8,
     linkDistance: 20,
     friction: 0.9,
@@ -104,22 +72,12 @@ const defaultOptions: GraphOptions = {
     // Visual appearance
     nodeSize: 3,
     nodeColor: '#8b5cf6',
-    nodeBorderWidth: 1,
-    nodeBorderColor: '#ffffff',
     linkColor: '#94a3b8',
     linkWidth: 1,
-    linkArrows: false,
-    
-    // Interaction
-    zoom: true,
-    disableSimulation: false,
     
     // Display
     backgroundColor: 'transparent',
-    showLabels: false,
     showDynamicLabels: true,
-    labelColor: '#6b7280',
-    hoveredNodeLabelColor: '#374151',
     
     // Data filtering
     depth: -1,
