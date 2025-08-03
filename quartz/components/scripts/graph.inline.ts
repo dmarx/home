@@ -178,12 +178,11 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
       return () => {}
     }
 
-    // IMPORTANT: Use DIV instead of canvas - this might be the key issue!
+    // Create graph container div
     const graphDiv = document.createElement('div')
     graphDiv.style.width = '100%'
     graphDiv.style.height = '100%'
     graphDiv.style.position = 'relative'
-    graphDiv.style.border = '1px solid red' // Debug border
     container.appendChild(graphDiv)
 
     console.log('🎨 Graph div created and added to container')
@@ -295,7 +294,16 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
       return () => {
         console.log('🧹 Cleaning up graph')
         resizeObserver.disconnect()
-        cosmograph.destroy()
+        try {
+          // Check if cosmograph has destroy method before calling it
+          if (cosmograph && typeof cosmograph.destroy === 'function') {
+            cosmograph.destroy()
+          } else if (cosmograph && typeof cosmograph.clear === 'function') {
+            cosmograph.clear()
+          }
+        } catch (error) {
+          console.warn('⚠️ Error during cosmograph cleanup:', error)
+        }
         removeAllChildren(container)
       }
 
@@ -314,6 +322,7 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
 
 let localGraphCleanups: (() => void)[] = []
 let globalGraphCleanups: (() => void)[] = []
+let globalEscapeCleanups: (() => void)[] = []
 
 function cleanupLocalGraphs() {
   console.log('🧹 Cleaning up local graphs')
@@ -329,6 +338,12 @@ function cleanupGlobalGraphs() {
     cleanup()
   }
   globalGraphCleanups = []
+  
+  // Also cleanup escape handlers
+  for (const cleanup of globalEscapeCleanups) {
+    cleanup()
+  }
+  globalEscapeCleanups = []
 }
 
 document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
@@ -378,12 +393,34 @@ document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
       }
 
       const graphContainer = container.querySelector(".global-graph-container") as HTMLElement
-      registerEscapeHandler(container, hideGlobalGraph)
+      
+      // Add click-outside-to-close functionality
+      const backdropClickHandler = (e: MouseEvent) => {
+        if (e.target === container) {
+          console.log('🖱️ Clicked outside graph, closing...')
+          hideGlobalGraph()
+        }
+      }
+      container.addEventListener('click', backdropClickHandler)
+      
+      // Store cleanup function for this specific handler
+      const cleanupBackdrop = () => container.removeEventListener('click', backdropClickHandler)
+      
+      // Register escape handler and store its cleanup
+      const cleanupEscape = registerEscapeHandler(container, hideGlobalGraph)
+      globalEscapeCleanups.push(cleanupEscape)
+      
       if (graphContainer) {
         try {
-          globalGraphCleanups.push(await renderGraph(graphContainer, slug))
+          const cleanup = await renderGraph(graphContainer, slug)
+          // Combine cleanups
+          globalGraphCleanups.push(() => {
+            cleanup()
+            cleanupBackdrop()
+          })
         } catch (error) {
           console.error('❌ Failed to render global graph:', error)
+          cleanupBackdrop()
         }
       }
     }
