@@ -1,4 +1,4 @@
-// quartz/components/scripts/graph.inline.ts - Debug Version
+// quartz/components/scripts/graph.inline.ts - Fixed Version
 import type { ContentDetails } from "../../plugins/emitters/contentIndex"
 import { Cosmograph } from "@cosmograph/cosmograph"
 import { registerEscapeHandler, removeAllChildren } from "./util"
@@ -60,9 +60,6 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
   const slug = simplifySlug(fullSlug)
   const visited = getVisited()
   removeAllChildren(container)
-
-  // The container should already have dimensions from CSS
-  // No need to set height/width as it's handled by .graph-outer (250px) and .global-graph-container (80vh/80vw)
 
   console.log('📦 Container dimensions:', {
     width: container.offsetWidth,
@@ -181,71 +178,81 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
       return () => {}
     }
 
-    // Create canvas
-    const canvas = document.createElement('canvas')
-    canvas.style.width = '100%'
-    canvas.style.height = '100%'
-    canvas.style.display = 'block'
-    canvas.style.border = '1px solid red' // Debug border
-    container.appendChild(canvas)
+    // IMPORTANT: Use DIV instead of canvas - this might be the key issue!
+    const graphDiv = document.createElement('div')
+    graphDiv.style.width = '100%'
+    graphDiv.style.height = '100%'
+    graphDiv.style.position = 'relative'
+    graphDiv.style.border = '1px solid red' // Debug border
+    container.appendChild(graphDiv)
 
-    console.log('🎨 Canvas created and added to container')
-    
-    // Function to update canvas size
-    const updateCanvasSize = () => {
-      const rect = container.getBoundingClientRect()
-      const dpr = window.devicePixelRatio || 1
-      
-      canvas.width = rect.width * dpr
-      canvas.height = rect.height * dpr
-      canvas.style.width = rect.width + 'px'
-      canvas.style.height = rect.height + 'px'
-      
-      console.log('📐 Canvas sized to:', {
-        width: canvas.width,
-        height: canvas.height,
-        styleWidth: canvas.style.width,
-        styleHeight: canvas.style.height,
-        containerRect: rect
-      })
-    }
+    console.log('🎨 Graph div created and added to container')
 
-    // Initial sizing
-    updateCanvasSize()
-
-    // Wait a bit for layout to settle
+    // Wait for layout
     await new Promise(resolve => setTimeout(resolve, 100))
-    updateCanvasSize()
 
-    // Initialize cosmograph with minimal config first
-    console.log('🚀 Initializing Cosmograph...')
+    console.log('🚀 Initializing Cosmograph with DIV...')
     
     try {
-      const cosmograph = new Cosmograph(canvas, {
+      // Create cosmograph with the DIV (not canvas)
+      const cosmograph = new Cosmograph(graphDiv, {
+        // Simulation settings - use simpler values for testing
         simulation: {
-          repulsion: config.repulsion || 0.5,
-          linkSpring: config.linkSpring || 1.0,
-          linkDistance: config.linkDistance || 10,
-          friction: config.friction || 0.85,
-          gravity: config.gravity || 0.1,
+          repulsion: 1.0,  // Increased for better separation
+          linkSpring: 0.5,
+          linkDistance: 50, // Increased for visibility
+          friction: 0.8,
+          gravity: 0.2,    // Increased to center nodes
         },
+        
+        // Essential rendering settings
         renderLinks: true,
         nodeColor: (node: NodeData) => {
-          const color = node.color || config.nodeColor || '#8b5cf6'
-          console.log('🎨 Node color for', node.id, ':', color)
+          const color = node.color || '#8b5cf6'
+          console.log('🎨 Setting node color for', node.id, ':', color)
           return color
         },
-        nodeSize: (node: NodeData) => node.size || config.nodeSize || 4,
-        linkColor: config.linkColor || '#64748b',
-        linkWidth: config.linkWidth || 1,
-        backgroundColor: config.backgroundColor || 'transparent',
-        showDynamicLabels: config.showDynamicLabels ?? true,
+        nodeSize: (node: NodeData) => {
+          const size = (node.size || 8) * 2 // Make nodes bigger for visibility
+          console.log('📏 Setting node size for', node.id, ':', size)
+          return size
+        },
+        linkColor: '#94a3b8',
+        linkWidth: 2, // Make links thicker for visibility
+        
+        // Background and viewport
+        backgroundColor: 'rgba(0,0,0,0)', // Transparent
+        pixelRatio: window.devicePixelRatio || 1,
+        
+        // Labels
+        showDynamicLabels: true,
+        
+        // Initial view settings - CRITICAL for visibility
+        fitViewOnInit: true,
+        fitViewDelay: 500,
+        fitViewPadding: 0.1,
+        
+        // Events
         events: {
-          onClick: (node?: NodeData) => {
+          onClick: (node?: NodeData, event?) => {
             console.log('🖱️ Node clicked:', node?.id)
             if (node) {
               const target = resolveRelative(fullSlug, node.id)
               window.spaNavigate(new URL(target, window.location.toString()))
+            }
+          },
+          
+          onNodeMouseOver: (node?: NodeData) => {
+            if (config.focusOnHover && node) {
+              console.log('🏠 Hovering over node:', node.id)
+              // TODO: Implement focus highlight
+            }
+          },
+          
+          onNodeMouseOut: () => {
+            if (config.focusOnHover) {
+              console.log('👋 Mouse left node')
+              // TODO: Reset focus highlight
             }
           }
         }
@@ -255,24 +262,29 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
 
       // Set data
       console.log('📊 Setting graph data...')
+      console.log('Sample nodes:', nodes.slice(0, 3))
+      console.log('Sample links:', filteredLinks.slice(0, 3))
+      
       cosmograph.setData(nodes, filteredLinks)
       console.log('✅ Data set successfully')
 
-      // Try to fit view
-      setTimeout(() => {
-        try {
-          console.log('🔍 Attempting to fit view...')
-          cosmograph.fitView()
-          console.log('✅ View fitted successfully')
-        } catch (e) {
-          console.error('❌ Error fitting view:', e)
-        }
-      }, 500)
+      // Multiple attempts to fit view for visibility
+      const fitViewAttempts = [100, 500, 1000, 2000]
+      fitViewAttempts.forEach(delay => {
+        setTimeout(() => {
+          try {
+            console.log(`🔍 Attempting to fit view (${delay}ms)...`)
+            cosmograph.fitView()
+            console.log('✅ View fitted successfully')
+          } catch (e) {
+            console.error('❌ Error fitting view:', e)
+          }
+        }, delay)
+      })
 
       // Handle resize
       const resizeObserver = new ResizeObserver(() => {
-        console.log('📏 Container resized, updating canvas size and fitting view...')
-        updateCanvasSize()
+        console.log('📏 Container resized, fitting view...')
         setTimeout(() => cosmograph.fitView(), 100)
       })
       resizeObserver.observe(container)
