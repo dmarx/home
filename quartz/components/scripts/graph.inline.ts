@@ -61,15 +61,8 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
   const visited = getVisited()
   removeAllChildren(container)
 
-  // Ensure container has dimensions
-  if (!container.style.height) {
-    container.style.height = '400px'
-    console.log('📏 Set container height to 400px')
-  }
-  if (!container.style.width) {
-    container.style.width = '100%'
-    console.log('📏 Set container width to 100%')
-  }
+  // The container should already have dimensions from CSS
+  // No need to set height/width as it's handled by .graph-outer (250px) and .global-graph-container (80vh/80vw)
 
   console.log('📦 Container dimensions:', {
     width: container.offsetWidth,
@@ -192,27 +185,37 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
     const canvas = document.createElement('canvas')
     canvas.style.width = '100%'
     canvas.style.height = '100%'
-    canvas.style.background = 'transparent'
+    canvas.style.display = 'block'
     canvas.style.border = '1px solid red' // Debug border
     container.appendChild(canvas)
 
     console.log('🎨 Canvas created and added to container')
-    console.log('📐 Canvas dimensions after creation:', {
-      width: canvas.width,
-      height: canvas.height,
-      offsetWidth: canvas.offsetWidth,
-      offsetHeight: canvas.offsetHeight
-    })
+    
+    // Function to update canvas size
+    const updateCanvasSize = () => {
+      const rect = container.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
+      
+      canvas.width = rect.width * dpr
+      canvas.height = rect.height * dpr
+      canvas.style.width = rect.width + 'px'
+      canvas.style.height = rect.height + 'px'
+      
+      console.log('📐 Canvas sized to:', {
+        width: canvas.width,
+        height: canvas.height,
+        styleWidth: canvas.style.width,
+        styleHeight: canvas.style.height,
+        containerRect: rect
+      })
+    }
 
-    // Wait a bit for canvas to be properly sized
+    // Initial sizing
+    updateCanvasSize()
+
+    // Wait a bit for layout to settle
     await new Promise(resolve => setTimeout(resolve, 100))
-
-    console.log('📐 Canvas dimensions after timeout:', {
-      width: canvas.width,
-      height: canvas.height,
-      offsetWidth: canvas.offsetWidth,
-      offsetHeight: canvas.offsetHeight
-    })
+    updateCanvasSize()
 
     // Initialize cosmograph with minimal config first
     console.log('🚀 Initializing Cosmograph...')
@@ -268,8 +271,9 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
 
       // Handle resize
       const resizeObserver = new ResizeObserver(() => {
-        console.log('📏 Container resized, fitting view...')
-        cosmograph.fitView()
+        console.log('📏 Container resized, updating canvas size and fitting view...')
+        updateCanvasSize()
+        setTimeout(() => cosmograph.fitView(), 100)
       })
       resizeObserver.observe(container)
 
