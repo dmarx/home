@@ -373,6 +373,7 @@ document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
   })
 
   const containers = [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+  console.log('📦 Found global graph containers:', containers.length)
   
   async function renderGlobalGraph() {
     console.log('🌍 Rendering global graphs...')
@@ -405,14 +406,38 @@ document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
 
   function hideGlobalGraph() {
     console.log('🙈 Hiding global graphs...')
+    
+    // First cleanup the graph instances
     cleanupGlobalGraphs()
-    for (const container of containers) {
+    
+    // Get fresh container references (in case DOM changed)
+    const currentContainers = [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+    console.log('📦 Current containers for hiding:', currentContainers.length)
+    
+    // Then hide the overlay containers
+    for (let i = 0; i < currentContainers.length; i++) {
+      const container = currentContainers[i]
+      console.log(`🙈 Processing container ${i}:`, {
+        hasActiveClass: container.classList.contains('active'),
+        display: getComputedStyle(container).display,
+        classList: Array.from(container.classList)
+      })
+      
       container.classList.remove("active")
+      
+      console.log(`🙈 After removing active class:`, {
+        hasActiveClass: container.classList.contains('active'),
+        display: getComputedStyle(container).display,
+        classList: Array.from(container.classList)
+      })
+      
       const sidebar = container.closest(".sidebar") as HTMLElement
       if (sidebar) {
         sidebar.style.zIndex = ""
       }
     }
+    
+    console.log('✅ Global graph hidden successfully')
   }
 
   async function shortcutHandler(e: HTMLElementEventMap["keydown"]) {
