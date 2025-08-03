@@ -1,6 +1,6 @@
 // quartz/components/scripts/graph.inline.ts
 import type { ContentDetails } from "../../plugins/emitters/contentIndex"
-import { Graph } from "@cosmograph/cosmograph"
+import { Cosmograph } from "@cosmograph/cosmograph"
 import { registerEscapeHandler, removeAllChildren } from "./util"
 import { FullSlug, SimpleSlug, getFullSlug, resolveRelative, simplifySlug } from "../../util/path"
 import { CosmographConfig } from "../Graph"
@@ -58,6 +58,14 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
   const slug = simplifySlug(fullSlug)
   const visited = getVisited()
   removeAllChildren(container)
+
+  // Ensure container has dimensions
+  if (!container.style.height) {
+    container.style.height = '400px'
+  }
+  if (!container.style.width) {
+    container.style.width = '100%'
+  }
 
   const config = JSON.parse(container.dataset["cfg"]!) as CosmographConfig
 
@@ -145,87 +153,79 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
 
   // Create canvas
   const canvas = document.createElement('canvas')
+  canvas.style.width = '100%'
+  canvas.style.height = '100%'
   container.appendChild(canvas)
 
   // Initialize cosmograph
-  const cosmograph = new Graph(canvas, {
+  const cosmograph = new Cosmograph(canvas, {
     // Simulation settings
     simulation: {
-      repulsion: config.repulsion,
-      repulsionTheta: config.repulsionTheta,
-      repulsionQuadtreeLevels: config.repulsionQuadtreeLevels,
-      linkSpring: config.linkSpring,
-      linkDistance: config.linkDistance,
-      friction: config.friction,
-      gravity: config.gravity,
-      center: config.gravity > 0,
+      repulsion: config.repulsion || 0.5,
+      linkSpring: config.linkSpring || 1.0,
+      linkDistance: config.linkDistance || 10,
+      friction: config.friction || 0.85,
+      gravity: config.gravity || 0.1,
     },
     
     // Rendering settings
     renderLinks: true,
-    renderHoveredNodeRing: true,
     nodeColor: (node: NodeData) => node.color || config.nodeColor,
     nodeSize: (node: NodeData) => node.size || config.nodeSize,
     linkColor: config.linkColor,
     linkWidth: config.linkWidth,
-    linkArrows: config.linkArrows,
     
     // Background
-    backgroundColor: config.backgroundColor,
+    backgroundColor: config.backgroundColor || 'transparent',
     
     // Labels
-    showLabelsFor: config.showLabels ? nodes : [],
     showDynamicLabels: config.showDynamicLabels,
-    nodeLabelAccessor: (node: NodeData) => node.text,
-    nodeLabelColor: config.labelColor,
-    hoveredNodeLabelColor: config.hoveredNodeLabelColor,
-    
-    // Interaction
-    disableSimulation: config.disableSimulation,
     
     // Events
-    onClick: (node?: NodeData) => {
-      if (node) {
-        const target = resolveRelative(fullSlug, node.id)
-        window.spaNavigate(new URL(target, window.location.toString()))
-      }
-    },
-    
-    onNodeMouseOver: (node?: NodeData) => {
-      if (config.focusOnHover && node) {
-        // Get connected nodes
-        const connectedNodeIds = new Set<SimpleSlug>()
-        filteredLinks.forEach(link => {
-          if (link.source === node.id) {
-            connectedNodeIds.add(link.target)
-          }
-          if (link.target === node.id) {
-            connectedNodeIds.add(link.source)
-          }
-        })
-        connectedNodeIds.add(node.id)
-        
-        // Highlight connected nodes and dim others
-        cosmograph.setConfig({
-          nodeColor: (n: NodeData) => {
-            if (connectedNodeIds.has(n.id)) {
-              return n.color || config.nodeColor
-            } else {
-              // Return dimmed version of the color
-              const originalColor = n.color || config.nodeColor
-              return originalColor + '40' // Add alpha for dimming
+    events: {
+      onClick: (node?: NodeData) => {
+        if (node) {
+          const target = resolveRelative(fullSlug, node.id)
+          window.spaNavigate(new URL(target, window.location.toString()))
+        }
+      },
+      
+      onNodeMouseOver: (node?: NodeData) => {
+        if (config.focusOnHover && node) {
+          // Get connected nodes
+          const connectedNodeIds = new Set<SimpleSlug>()
+          filteredLinks.forEach(link => {
+            if (link.source === node.id) {
+              connectedNodeIds.add(link.target)
             }
-          }
-        })
-      }
-    },
-    
-    onNodeMouseOut: () => {
-      if (config.focusOnHover) {
-        // Reset colors
-        cosmograph.setConfig({
-          nodeColor: (node: NodeData) => node.color || config.nodeColor
-        })
+            if (link.target === node.id) {
+              connectedNodeIds.add(link.source)
+            }
+          })
+          connectedNodeIds.add(node.id)
+          
+          // Highlight connected nodes and dim others
+          cosmograph.setConfig({
+            nodeColor: (n: NodeData) => {
+              if (connectedNodeIds.has(n.id)) {
+                return n.color || config.nodeColor
+              } else {
+                // Return dimmed version of the color
+                const originalColor = n.color || config.nodeColor
+                return originalColor + '40' // Add alpha for dimming
+              }
+            }
+          })
+        }
+      },
+      
+      onNodeMouseOut: () => {
+        if (config.focusOnHover) {
+          // Reset colors
+          cosmograph.setConfig({
+            nodeColor: (node: NodeData) => node.color || config.nodeColor
+          })
+        }
       }
     }
   })
