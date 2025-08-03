@@ -234,10 +234,29 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
         // Events
         events: {
           onClick: (node?: NodeData, event?) => {
-            console.log('🖱️ Node clicked:', node?.id)
-            if (node) {
-              const target = resolveRelative(fullSlug, node.id)
-              window.spaNavigate(new URL(target, window.location.toString()))
+            console.log('🖱️ Node clicked:', node?.id, node)
+            if (node && node.id) {
+              console.log('🧭 Navigating to:', node.id)
+              try {
+                const target = resolveRelative(fullSlug, node.id)
+                console.log('🔗 Resolved target URL:', target)
+                
+                // Check if spaNavigate is available
+                if (typeof window.spaNavigate === 'function') {
+                  window.spaNavigate(new URL(target, window.location.toString()))
+                  console.log('✅ Navigation initiated via SPA')
+                } else {
+                  // Fallback to regular navigation
+                  console.log('⚠️ SPA navigation not available, using fallback')
+                  window.location.href = target
+                }
+              } catch (error) {
+                console.error('❌ Navigation error:', error)
+                // Fallback navigation
+                window.location.href = node.id
+              }
+            } else {
+              console.log('⚠️ No node or node.id in click event')
             }
           },
           
@@ -261,11 +280,14 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
 
       // Set data
       console.log('📊 Setting graph data...')
-      console.log('Sample nodes:', nodes.slice(0, 3))
+      console.log('Sample nodes:', nodes.slice(0, 3).map(n => ({ id: n.id, text: n.text, color: n.color })))
       console.log('Sample links:', filteredLinks.slice(0, 3))
       
       cosmograph.setData(nodes, filteredLinks)
       console.log('✅ Data set successfully')
+      
+      // Add debugging for click events
+      console.log('🖱️ Click handler should be ready for nodes:', nodes.map(n => n.id).slice(0, 5))
 
       // Multiple attempts to fit view for visibility
       const fitViewAttempts = [100, 500, 1000, 2000]
