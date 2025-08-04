@@ -233,8 +233,9 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
         
         // Events
         events: {
-          onClick: (node?: NodeData, event?) => {
-            console.log('🖱️ Node clicked:', node?.id, node)
+          onClick: (node?: NodeData, event?: any) => {
+            console.log('🖱️ CLICK EVENT DETECTED!', { node, event, hasNodeId: !!node?.id })
+            
             if (node && node.id) {
               console.log('🧭 Navigating to:', node.id)
               try {
@@ -256,7 +257,7 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
                 window.location.href = node.id
               }
             } else {
-              console.log('⚠️ No node or node.id in click event')
+              console.log('⚠️ No node or node.id in click event', node)
             }
           },
           
@@ -277,6 +278,7 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
       })
 
       console.log('✅ Cosmograph initialized successfully')
+      console.log('🔧 Cosmograph config applied, onClick should be registered')
 
       // Set data
       console.log('📊 Setting graph data...')
