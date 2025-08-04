@@ -1,59 +1,28 @@
+// quartz/components/scripts/graph.inline.ts - Fixed Version
 import type { ContentDetails } from "../../plugins/emitters/contentIndex"
-import {
-  scaleOrdinal, schemeCategory10, schemeSet3,
-  SimulationNodeDatum,
-  SimulationLinkDatum,
-  Simulation,
-  forceSimulation,
-  forceManyBody,
-  forceCenter,
-  forceLink,
-  forceCollide,
-  forceRadial,
-  zoomIdentity,
-  select,
-  drag,
-  zoom,
-} from "d3"
-import { Text, Graphics, Application, Container, Circle } from "pixi.js"
-import { Group as TweenGroup, Tween as Tweened } from "@tweenjs/tween.js"
+import { Cosmograph } from "@cosmograph/cosmograph"
 import { registerEscapeHandler, removeAllChildren } from "./util"
 import { FullSlug, SimpleSlug, getFullSlug, resolveRelative, simplifySlug } from "../../util/path"
-import { D3Config } from "../Graph"
-
-type GraphicsInfo = {
-  color: string
-  gfx: Graphics
-  alpha: number
-  active: boolean
-}
+import { CosmographConfig } from "../Graph"
 
 type NodeData = {
   id: SimpleSlug
   text: string
   tags: string[]
-} & SimulationNodeDatum
+  color?: string
+  size?: number
+  visited?: boolean
+  isCurrent?: boolean
+  isTag?: boolean
+}
 
-type SimpleLinkData = {
+type LinkData = {
   source: SimpleSlug
   target: SimpleSlug
 }
 
-type LinkData = {
-  source: NodeData
-  target: NodeData
-} & SimulationLinkDatum<NodeData>
-
-type LinkRenderData = GraphicsInfo & {
-  simulationData: LinkData
-}
-
-type NodeRenderData = GraphicsInfo & {
-  simulationData: NodeData
-  label: Text
-}
-
 const localStorageKey = "graph-visited"
+
 function getVisited(): Set<SimpleSlug> {
   return new Set(JSON.parse(localStorage.getItem(localStorageKey) ?? "[]"))
 }
@@ -64,591 +33,314 @@ function addToVisited(slug: SimpleSlug) {
   localStorage.setItem(localStorageKey, JSON.stringify([...visited]))
 }
 
-type TweenNode = {
-  update: (time: number) => void
-  stop: () => void
+function getComputedCSSColor(variable: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(variable).trim()
 }
 
-// workaround for pixijs webgpu issue: https://github.com/pixijs/pixijs/issues/11389
-async function determineGraphicsAPI(): Promise<"webgpu" | "webgl"> {
-  const adapter = await navigator.gpu?.requestAdapter().catch(() => null)
-  const device = adapter && (await adapter.requestDevice().catch(() => null))
-  if (!device) {
-    return "webgl"
+function getNodeColor(node: NodeData): string {
+  if (node.isCurrent) {
+    return getComputedCSSColor('--secondary') || '#8b5cf6'
+  } else if (node.visited || node.isTag) {
+    return getComputedCSSColor('--tertiary') || '#06b6d4'
+  } else {
+    return getComputedCSSColor('--gray') || '#6b7280'
   }
-
-  const canvas = document.createElement("canvas")
-  const gl =
-    (canvas.getContext("webgl2") as WebGL2RenderingContext | null) ??
-    (canvas.getContext("webgl") as WebGLRenderingContext | null)
-
-  // we have to return webgl so pixijs automatically falls back to canvas
-  if (!gl) {
-    return "webgl"
-  }
-
-  const webglMaxTextures = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS)
-  const webgpuMaxTextures = device.limits.maxSampledTexturesPerShaderStage
-
-  return webglMaxTextures === webgpuMaxTextures ? "webgpu" : "webgl"
 }
 
-async function renderGraph(graph: HTMLElement, fullSlug: FullSlug) {
+function getNodeSize(node: NodeData, links: LinkData[]): number {
+  const numLinks = links.filter(
+    (l) => l.source === node.id || l.target === node.id,
+  ).length
+  return Math.max(4, 2 + Math.sqrt(numLinks))
+}
+
+async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<() => void> {
+  console.log('🎯 Starting graph render for:', fullSlug)
+  
   const slug = simplifySlug(fullSlug)
   const visited = getVisited()
-  removeAllChildren(graph)
+  removeAllChildren(container)
 
-  let {
-    drag: enableDrag,
-    zoom: enableZoom,
-    depth,
-    scale,
-    repelForce,
-    centerForce,
-    linkDistance,
-    fontSize,
-    opacityScale,
-    removeTags,
-    showTags,
-    focusOnHover,
-    enableRadial,
-  } = JSON.parse(graph.dataset["cfg"]!) as D3Config
-
-  const data: Map<SimpleSlug, ContentDetails> = new Map(
-    Object.entries<ContentDetails>(await fetchData).map(([k, v]) => [
-      simplifySlug(k as FullSlug),
-      v,
-    ]),
-  )
-  const links: SimpleLinkData[] = []
-  const tags: SimpleSlug[] = []
-  const validLinks = new Set(data.keys())
-
-  const tweens = new Map<string, TweenNode>()
-  for (const [source, details] of data.entries()) {
-    const outgoing = details.links ?? []
-
-    for (const dest of outgoing) {
-      if (validLinks.has(dest)) {
-        links.push({ source: source, target: dest })
-      }
-    }
-
-    if (showTags) {
-      const localTags = details.tags
-        .filter((tag) => !removeTags.includes(tag))
-        .map((tag) => simplifySlug(("tags/" + tag) as FullSlug))
-
-      tags.push(...localTags.filter((tag) => !tags.includes(tag)))
-
-      for (const tag of localTags) {
-        links.push({ source: source, target: tag })
-      }
-    }
-  }
-
-  const neighbourhood = new Set<SimpleSlug>()
-  const wl: (SimpleSlug | "__SENTINEL")[] = [slug, "__SENTINEL"]
-  if (depth >= 0) {
-    while (depth >= 0 && wl.length > 0) {
-      // compute neighbours
-      const cur = wl.shift()!
-      if (cur === "__SENTINEL") {
-        depth--
-        wl.push("__SENTINEL")
-      } else {
-        neighbourhood.add(cur)
-        const outgoing = links.filter((l) => l.source === cur)
-        const incoming = links.filter((l) => l.target === cur)
-        wl.push(...outgoing.map((l) => l.target), ...incoming.map((l) => l.source))
-      }
-    }
-  } else {
-    validLinks.forEach((id) => neighbourhood.add(id))
-    if (showTags) tags.forEach((tag) => neighbourhood.add(tag))
-  }
-
-  const nodes = [...neighbourhood].map((url) => {
-    const text = url.startsWith("tags/") ? "#" + url.substring(5) : (data.get(url)?.title ?? url)
-    return {
-      id: url,
-      text,
-      tags: data.get(url)?.tags ?? [],
-    }
+  console.log('📦 Container dimensions:', {
+    width: container.offsetWidth,
+    height: container.offsetHeight,
+    style: container.style.cssText
   })
-  const graphData: { nodes: NodeData[]; links: LinkData[] } = {
-    nodes,
-    links: links
-      .filter((l) => neighbourhood.has(l.source) && neighbourhood.has(l.target))
-      .map((l) => ({
-        source: nodes.find((n) => n.id === l.source)!,
-        target: nodes.find((n) => n.id === l.target)!,
-      })),
+
+  const config = JSON.parse(container.dataset["cfg"]!) as CosmographConfig
+  console.log('⚙️ Graph config:', config)
+
+  // Check if fetchData is available
+  if (typeof fetchData === 'undefined') {
+    console.error('❌ fetchData is not available globally')
+    container.innerHTML = '<div style="padding: 20px; color: red;">Error: Graph data not available</div>'
+    return () => {}
   }
 
-  const width = graph.offsetWidth
-  const height = Math.max(graph.offsetHeight, 250)
-
-  // we virtualize the simulation and use pixi to actually render it
-  const simulation: Simulation<NodeData, LinkData> = forceSimulation<NodeData>(graphData.nodes)
-    .force("charge", forceManyBody().strength(-100 * repelForce))
-    .force("center", forceCenter().strength(centerForce))
-    .force("link", forceLink(graphData.links).distance(linkDistance))
-    .force("collide", forceCollide<NodeData>((n) => nodeRadius(n)).iterations(3))
-
-  const radius = (Math.min(width, height) / 2) * 0.8
-  if (enableRadial) simulation.force("radial", forceRadial(radius).strength(0.2))
-
-  // precompute style prop strings as pixi doesn't support css variables
-  const cssVars = [
-    "--secondary",
-    "--tertiary",
-    "--gray",
-    "--light",
-    "--lightgray",
-    "--dark",
-    "--darkgray",
-    "--bodyFont",
-  ] as const
-  const computedStyleMap = cssVars.reduce(
-    (acc, key) => {
-      acc[key] = getComputedStyle(document.documentElement).getPropertyValue(key)
-      return acc
-    },
-    {} as Record<(typeof cssVars)[number], string>,
-  )
-  
-  // Add this function after the existing color function
-  function createColorClassPalette(nodes) {
-    // Extract all unique colorclass tags from all nodes
-    const colorclassTags = new Set()
+  try {
+    // Load data
+    const rawData = await fetchData
+    console.log('📊 Raw data loaded:', Object.keys(rawData).length, 'entries')
     
-    for (const node of nodes) {
-      if (node.tags) {
-        for (const tag of node.tags) {
-          if (tag.startsWith('colorclass/')) {
-            colorclassTags.add(tag)
-          }
+    const data: Map<SimpleSlug, ContentDetails> = new Map(
+      Object.entries<ContentDetails>(rawData).map(([k, v]) => [
+        simplifySlug(k as FullSlug),
+        v,
+      ]),
+    )
+
+    const links: LinkData[] = []
+    const tags: SimpleSlug[] = []
+    const validLinks = new Set(data.keys())
+
+    console.log('🔗 Building links and collecting tags...')
+
+    // Build links and collect tags
+    for (const [source, details] of data.entries()) {
+      const outgoing = details.links ?? []
+
+      for (const dest of outgoing) {
+        if (validLinks.has(dest)) {
+          links.push({ source: source, target: dest })
+        }
+      }
+
+      if (config.showTags) {
+        const localTags = details.tags
+          .filter((tag) => !config.removeTags.includes(tag))
+          .map((tag) => simplifySlug(("tags/" + tag) as FullSlug))
+
+        tags.push(...localTags.filter((tag) => !tags.includes(tag)))
+
+        for (const tag of localTags) {
+          links.push({ source: source, target: tag })
         }
       }
     }
-    
-    const uniqueColorclasses = Array.from(colorclassTags)
-    
-    // Create discrete color scale - use Set3 for more colors, Category10 for fewer
-    const colorScheme = uniqueColorclasses.length <= 10 ? schemeCategory10 : schemeSet3
-    const colorScale = scaleOrdinal(colorScheme).domain(uniqueColorclasses)
-    
-    return colorScale
-  }
-  
-  // Replace the existing color function with this enhanced version
-  function createColorFunction(nodes, slug, visited, computedStyleMap) {
-    const colorClassScale = createColorClassPalette(nodes)
-    
-    return function color(d) {
-      const isCurrent = d.id === slug
-      
-      // Priority 1: Current page gets secondary color
-      if (isCurrent) {
-        return computedStyleMap["--secondary"]
-      }
-      
-      // Priority 2: Check for colorclass tags
-      if (d.tags) {
-        const colorclassTag = d.tags.find(tag => tag.startsWith('colorclass'))
-        if (colorclassTag) {
-          return colorClassScale(colorclassTag)
+
+    console.log('🔗 Total links found:', links.length)
+
+    // Build neighborhood based on depth
+    const neighbourhood = new Set<SimpleSlug>()
+    const wl: (SimpleSlug | "__SENTINEL")[] = [slug, "__SENTINEL"]
+    let depth = config.depth
+
+    if (depth >= 0) {
+      while (depth >= 0 && wl.length > 0) {
+        const cur = wl.shift()!
+        if (cur === "__SENTINEL") {
+          depth--
+          wl.push("__SENTINEL")
+        } else {
+          neighbourhood.add(cur)
+          const outgoing = links.filter((l) => l.source === cur)
+          const incoming = links.filter((l) => l.target === cur)
+          wl.push(...outgoing.map((l) => l.target), ...incoming.map((l) => l.source))
         }
-      }
-      
-      // Priority 3: Fallback to original logic
-      if (visited.has(d.id) || d.id.startsWith("tags/")) {
-        return computedStyleMap["--tertiary"]
-      } else {
-        return computedStyleMap["--gray"]
-      }
-    }
-  }
-  
-  // In the main renderGraph function, replace this section:
-  // OLD CODE:
-  // const color = (d: NodeData) => {
-  //   const isCurrent = d.id === slug
-  //   if (isCurrent) {
-  //     return computedStyleMap["--secondary"]
-  //   } else if (visited.has(d.id) || d.id.startsWith("tags/")) {
-  //     return computedStyleMap["--tertiary"]
-  //   } else {
-  //     return computedStyleMap["--gray"]
-  //   }
-  // }
-  
-  // NEW CODE:
-  const color = createColorFunction(graphData.nodes, slug, visited, computedStyleMap)
-  
-  // Example usage in your Obsidian documents:
-  // ---
-  // tags: ['physics', 'colorclass/science', 'advanced']
-  // ---
-  // # Quantum Mechanics
-  // This document will be colored according to the 'colorclass/science' tag
-  
-  // ---  
-  // tags: ['programming', 'colorclass/tech', 'javascript']
-  // ---
-  // # Graph Visualization
-  // This document will be colored according to the 'colorclass/tech' tag
-
-  function nodeRadius(d: NodeData) {
-    const numLinks = graphData.links.filter(
-      (l) => l.source.id === d.id || l.target.id === d.id,
-    ).length
-    return 2 + Math.sqrt(numLinks)
-  }
-
-  let hoveredNodeId: string | null = null
-  let hoveredNeighbours: Set<string> = new Set()
-  const linkRenderData: LinkRenderData[] = []
-  const nodeRenderData: NodeRenderData[] = []
-  function updateHoverInfo(newHoveredId: string | null) {
-    hoveredNodeId = newHoveredId
-
-    if (newHoveredId === null) {
-      hoveredNeighbours = new Set()
-      for (const n of nodeRenderData) {
-        n.active = false
-      }
-
-      for (const l of linkRenderData) {
-        l.active = false
       }
     } else {
-      hoveredNeighbours = new Set()
-      for (const l of linkRenderData) {
-        const linkData = l.simulationData
-        if (linkData.source.id === newHoveredId || linkData.target.id === newHoveredId) {
-          hoveredNeighbours.add(linkData.source.id)
-          hoveredNeighbours.add(linkData.target.id)
-        }
+      validLinks.forEach((id) => neighbourhood.add(id))
+      if (config.showTags) tags.forEach((tag) => neighbourhood.add(tag))
+    }
 
-        l.active = linkData.source.id === newHoveredId || linkData.target.id === newHoveredId
+    console.log('🏘️ Neighbourhood size:', neighbourhood.size)
+
+    // Create nodes
+    const nodes: NodeData[] = [...neighbourhood].map((url) => {
+      const isTag = url.startsWith("tags/")
+      const text = isTag ? "#" + url.substring(5) : (data.get(url)?.title ?? url)
+      const nodeData: NodeData = {
+        id: url,
+        text,
+        tags: data.get(url)?.tags ?? [],
+        visited: visited.has(url),
+        isCurrent: url === slug,
+        isTag,
       }
-
-      for (const n of nodeRenderData) {
-        n.active = hoveredNeighbours.has(n.simulationData.id)
-      }
-    }
-  }
-
-  let dragStartTime = 0
-  let dragging = false
-
-  function renderLinks() {
-    tweens.get("link")?.stop()
-    const tweenGroup = new TweenGroup()
-
-    for (const l of linkRenderData) {
-      let alpha = 1
-
-      // if we are hovering over a node, we want to highlight the immediate neighbours
-      // with full alpha and the rest with default alpha
-      if (hoveredNodeId) {
-        alpha = l.active ? 1 : 0.2
-      }
-
-      l.color = l.active ? computedStyleMap["--gray"] : computedStyleMap["--lightgray"]
-      tweenGroup.add(new Tweened<LinkRenderData>(l).to({ alpha }, 200))
-    }
-
-    tweenGroup.getAll().forEach((tw) => tw.start())
-    tweens.set("link", {
-      update: tweenGroup.update.bind(tweenGroup),
-      stop() {
-        tweenGroup.getAll().forEach((tw) => tw.stop())
-      },
+      
+      nodeData.color = getNodeColor(nodeData)
+      nodeData.size = getNodeSize(nodeData, links)
+      
+      return nodeData
     })
-  }
 
-  function renderLabels() {
-    tweens.get("label")?.stop()
-    const tweenGroup = new TweenGroup()
-
-    const defaultScale = 1 / scale
-    const activeScale = defaultScale * 1.1
-    for (const n of nodeRenderData) {
-      const nodeId = n.simulationData.id
-
-      if (hoveredNodeId === nodeId) {
-        tweenGroup.add(
-          new Tweened<Text>(n.label).to(
-            {
-              alpha: 1,
-              scale: { x: activeScale, y: activeScale },
-            },
-            100,
-          ),
-        )
-      } else {
-        tweenGroup.add(
-          new Tweened<Text>(n.label).to(
-            {
-              alpha: n.label.alpha,
-              scale: { x: defaultScale, y: defaultScale },
-            },
-            100,
-          ),
-        )
-      }
-    }
-
-    tweenGroup.getAll().forEach((tw) => tw.start())
-    tweens.set("label", {
-      update: tweenGroup.update.bind(tweenGroup),
-      stop() {
-        tweenGroup.getAll().forEach((tw) => tw.stop())
-      },
-    })
-  }
-
-  function renderNodes() {
-    tweens.get("hover")?.stop()
-
-    const tweenGroup = new TweenGroup()
-    for (const n of nodeRenderData) {
-      let alpha = 1
-
-      // if we are hovering over a node, we want to highlight the immediate neighbours
-      if (hoveredNodeId !== null && focusOnHover) {
-        alpha = n.active ? 1 : 0.2
-      }
-
-      tweenGroup.add(new Tweened<Graphics>(n.gfx, tweenGroup).to({ alpha }, 200))
-    }
-
-    tweenGroup.getAll().forEach((tw) => tw.start())
-    tweens.set("hover", {
-      update: tweenGroup.update.bind(tweenGroup),
-      stop() {
-        tweenGroup.getAll().forEach((tw) => tw.stop())
-      },
-    })
-  }
-
-  function renderPixiFromD3() {
-    renderNodes()
-    renderLinks()
-    renderLabels()
-  }
-
-  tweens.forEach((tween) => tween.stop())
-  tweens.clear()
-
-  const pixiPreference = await determineGraphicsAPI()
-  const app = new Application()
-  await app.init({
-    width,
-    height,
-    antialias: true,
-    autoStart: false,
-    autoDensity: true,
-    backgroundAlpha: 0,
-    preference: pixiPreference,
-    resolution: window.devicePixelRatio,
-    eventMode: "static",
-  })
-  graph.appendChild(app.canvas)
-
-  const stage = app.stage
-  stage.interactive = false
-
-  const labelsContainer = new Container<Text>({ zIndex: 3, isRenderGroup: true })
-  const nodesContainer = new Container<Graphics>({ zIndex: 2, isRenderGroup: true })
-  const linkContainer = new Container<Graphics>({ zIndex: 1, isRenderGroup: true })
-  stage.addChild(nodesContainer, labelsContainer, linkContainer)
-
-  for (const n of graphData.nodes) {
-    const nodeId = n.id
-
-    const label = new Text({
-      interactive: false,
-      eventMode: "none",
-      text: n.text,
-      alpha: 0,
-      anchor: { x: 0.5, y: 1.2 },
-      style: {
-        fontSize: fontSize * 15,
-        fill: computedStyleMap["--dark"],
-        fontFamily: computedStyleMap["--bodyFont"],
-      },
-      resolution: window.devicePixelRatio * 4,
-    })
-    label.scale.set(1 / scale)
-
-    let oldLabelOpacity = 0
-    const isTagNode = nodeId.startsWith("tags/")
-    const gfx = new Graphics({
-      interactive: true,
-      label: nodeId,
-      eventMode: "static",
-      hitArea: new Circle(0, 0, nodeRadius(n)),
-      cursor: "pointer",
-    })
-      .circle(0, 0, nodeRadius(n))
-      .fill({ color: isTagNode ? computedStyleMap["--light"] : color(n) })
-      .on("pointerover", (e) => {
-        updateHoverInfo(e.target.label)
-        oldLabelOpacity = label.alpha
-        if (!dragging) {
-          renderPixiFromD3()
-        }
-      })
-      .on("pointerleave", () => {
-        updateHoverInfo(null)
-        label.alpha = oldLabelOpacity
-        if (!dragging) {
-          renderPixiFromD3()
-        }
-      })
-
-    if (isTagNode) {
-      gfx.stroke({ width: 2, color: computedStyleMap["--tertiary"] })
-    }
-
-    nodesContainer.addChild(gfx)
-    labelsContainer.addChild(label)
-
-    const nodeRenderDatum: NodeRenderData = {
-      simulationData: n,
-      gfx,
-      label,
-      color: color(n),
-      alpha: 1,
-      active: false,
-    }
-
-    nodeRenderData.push(nodeRenderDatum)
-  }
-
-  for (const l of graphData.links) {
-    const gfx = new Graphics({ interactive: false, eventMode: "none" })
-    linkContainer.addChild(gfx)
-
-    const linkRenderDatum: LinkRenderData = {
-      simulationData: l,
-      gfx,
-      color: computedStyleMap["--lightgray"],
-      alpha: 1,
-      active: false,
-    }
-
-    linkRenderData.push(linkRenderDatum)
-  }
-
-  let currentTransform = zoomIdentity
-  if (enableDrag) {
-    select<HTMLCanvasElement, NodeData | undefined>(app.canvas).call(
-      drag<HTMLCanvasElement, NodeData | undefined>()
-        .container(() => app.canvas)
-        .subject(() => graphData.nodes.find((n) => n.id === hoveredNodeId))
-        .on("start", function dragstarted(event) {
-          if (!event.active) simulation.alphaTarget(1).restart()
-          event.subject.fx = event.subject.x
-          event.subject.fy = event.subject.y
-          event.subject.__initialDragPos = {
-            x: event.subject.x,
-            y: event.subject.y,
-            fx: event.subject.fx,
-            fy: event.subject.fy,
-          }
-          dragStartTime = Date.now()
-          dragging = true
-        })
-        .on("drag", function dragged(event) {
-          const initPos = event.subject.__initialDragPos
-          event.subject.fx = initPos.x + (event.x - initPos.x) / currentTransform.k
-          event.subject.fy = initPos.y + (event.y - initPos.y) / currentTransform.k
-        })
-        .on("end", function dragended(event) {
-          if (!event.active) simulation.alphaTarget(0)
-          event.subject.fx = null
-          event.subject.fy = null
-          dragging = false
-
-          // if the time between mousedown and mouseup is short, we consider it a click
-          if (Date.now() - dragStartTime < 500) {
-            const node = graphData.nodes.find((n) => n.id === event.subject.id) as NodeData
-            const targ = resolveRelative(fullSlug, node.id)
-            window.spaNavigate(new URL(targ, window.location.toString()))
-          }
-        }),
+    // Filter links to only include nodes in neighbourhood
+    const filteredLinks = links.filter(
+      (l) => neighbourhood.has(l.source) && neighbourhood.has(l.target)
     )
-  } else {
-    for (const node of nodeRenderData) {
-      node.gfx.on("click", () => {
-        const targ = resolveRelative(fullSlug, node.simulationData.id)
-        window.spaNavigate(new URL(targ, window.location.toString()))
-      })
+
+    console.log('👥 Nodes to render:', nodes.length)
+    console.log('🔗 Links to render:', filteredLinks.length)
+
+    if (nodes.length === 0) {
+      console.warn('⚠️ No nodes to render!')
+      container.innerHTML = '<div style="padding: 20px; color: orange;">No nodes found for this page</div>'
+      return () => {}
     }
-  }
 
-  if (enableZoom) {
-    select<HTMLCanvasElement, NodeData>(app.canvas).call(
-      zoom<HTMLCanvasElement, NodeData>()
-        .extent([
-          [0, 0],
-          [width, height],
-        ])
-        .scaleExtent([0.25, 4])
-        .on("zoom", ({ transform }) => {
-          currentTransform = transform
-          stage.scale.set(transform.k, transform.k)
-          stage.position.set(transform.x, transform.y)
+    // Create graph container div
+    const graphDiv = document.createElement('div')
+    graphDiv.style.width = '100%'
+    graphDiv.style.height = '100%'
+    graphDiv.style.position = 'relative'
+    container.appendChild(graphDiv)
 
-          // zoom adjusts opacity of labels too
-          const scale = transform.k * opacityScale
-          let scaleOpacity = Math.max((scale - 1) / 3.75, 0)
-          const activeNodes = nodeRenderData.filter((n) => n.active).flatMap((n) => n.label)
+    console.log('🎨 Graph div created and added to container')
 
-          for (const label of labelsContainer.children) {
-            if (!activeNodes.includes(label)) {
-              label.alpha = scaleOpacity
+    // Wait for layout
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    console.log('🚀 Initializing Cosmograph with DIV...')
+    
+    try {
+      // Create cosmograph with the DIV (not canvas)
+      const cosmograph = new Cosmograph(graphDiv, {
+        // Simulation settings - use simpler values for testing
+        simulation: {
+          repulsion: 1.0,  // Increased for better separation
+          linkSpring: 0.5,
+          linkDistance: 50, // Increased for visibility
+          friction: 0.8,
+          gravity: 0.2,    // Increased to center nodes
+        },
+        
+        // Essential rendering settings
+        renderLinks: true,
+        nodeColor: (node: NodeData) => {
+          const color = node.color || '#8b5cf6'
+          console.log('🎨 Setting node color for', node.id, ':', color)
+          return color
+        },
+        nodeSize: (node: NodeData) => {
+          const size = (node.size || 8) * 2 // Make nodes bigger for visibility
+          console.log('📏 Setting node size for', node.id, ':', size)
+          return size
+        },
+        linkColor: '#94a3b8',
+        linkWidth: 2, // Make links thicker for visibility
+        
+        // Background and viewport
+        backgroundColor: 'rgba(0,0,0,0)', // Transparent
+        pixelRatio: window.devicePixelRatio || 1,
+        
+        // Labels
+        showDynamicLabels: true,
+        
+        // Initial view settings - CRITICAL for visibility
+        fitViewOnInit: true,
+        fitViewDelay: 500,
+        fitViewPadding: 0.1,
+        
+        // Events
+        events: {
+          onClick: (node?: NodeData, event?: any) => {
+            console.log('🖱️ CLICK EVENT DETECTED!', { node, event, hasNodeId: !!node?.id })
+            
+            if (node && node.id) {
+              console.log('🧭 Navigating to:', node.id)
+              try {
+                const target = resolveRelative(fullSlug, node.id)
+                console.log('🔗 Resolved target URL:', target)
+                
+                // Check if spaNavigate is available
+                if (typeof window.spaNavigate === 'function') {
+                  window.spaNavigate(new URL(target, window.location.toString()))
+                  console.log('✅ Navigation initiated via SPA')
+                } else {
+                  // Fallback to regular navigation
+                  console.log('⚠️ SPA navigation not available, using fallback')
+                  window.location.href = target
+                }
+              } catch (error) {
+                console.error('❌ Navigation error:', error)
+                // Fallback navigation
+                window.location.href = node.id
+              }
+            } else {
+              console.log('⚠️ No node or node.id in click event', node)
+            }
+          },
+          
+          onNodeMouseOver: (node?: NodeData) => {
+            if (config.focusOnHover && node) {
+              console.log('🏠 Hovering over node:', node.id)
+              // TODO: Implement focus highlight
+            }
+          },
+          
+          onNodeMouseOut: () => {
+            if (config.focusOnHover) {
+              console.log('👋 Mouse left node')
+              // TODO: Reset focus highlight
             }
           }
-        }),
-    )
-  }
+        }
+      })
 
-  let stopAnimation = false
-  function animate(time: number) {
-    if (stopAnimation) return
-    for (const n of nodeRenderData) {
-      const { x, y } = n.simulationData
-      if (!x || !y) continue
-      n.gfx.position.set(x + width / 2, y + height / 2)
-      if (n.label) {
-        n.label.position.set(x + width / 2, y + height / 2)
+      console.log('✅ Cosmograph initialized successfully')
+      console.log('🔧 Cosmograph config applied, onClick should be registered')
+
+      // Set data
+      console.log('📊 Setting graph data...')
+      console.log('Sample nodes:', nodes.slice(0, 3).map(n => ({ id: n.id, text: n.text, color: n.color })))
+      console.log('Sample links:', filteredLinks.slice(0, 3))
+      
+      cosmograph.setData(nodes, filteredLinks)
+      console.log('✅ Data set successfully')
+      
+      // Add debugging for click events
+      console.log('🖱️ Click handler should be ready for nodes:', nodes.map(n => n.id).slice(0, 5))
+
+      // Multiple attempts to fit view for visibility
+      const fitViewAttempts = [100, 500, 1000, 2000]
+      fitViewAttempts.forEach(delay => {
+        setTimeout(() => {
+          try {
+            console.log(`🔍 Attempting to fit view (${delay}ms)...`)
+            cosmograph.fitView()
+            console.log('✅ View fitted successfully')
+          } catch (e) {
+            console.error('❌ Error fitting view:', e)
+          }
+        }, delay)
+      })
+
+      // Handle resize
+      const resizeObserver = new ResizeObserver(() => {
+        console.log('📏 Container resized, fitting view...')
+        setTimeout(() => cosmograph.fitView(), 100)
+      })
+      resizeObserver.observe(container)
+
+      console.log('✅ Graph render completed successfully')
+
+      // Cleanup function
+      return () => {
+        console.log('🧹 Cleaning up graph')
+        resizeObserver.disconnect()
+        try {
+          // Check if cosmograph has destroy method before calling it
+          if (cosmograph && typeof cosmograph.destroy === 'function') {
+            cosmograph.destroy()
+          } else if (cosmograph && typeof cosmograph.clear === 'function') {
+            cosmograph.clear()
+          }
+        } catch (error) {
+          console.warn('⚠️ Error during cosmograph cleanup:', error)
+        }
+        removeAllChildren(container)
       }
+
+    } catch (error) {
+      console.error('❌ Error initializing Cosmograph:', error)
+      container.innerHTML = `<div style="padding: 20px; color: red;">Error initializing graph: ${error.message}</div>`
+      return () => {}
     }
 
-    for (const l of linkRenderData) {
-      const linkData = l.simulationData
-      l.gfx.clear()
-      l.gfx.moveTo(linkData.source.x! + width / 2, linkData.source.y! + height / 2)
-      l.gfx
-        .lineTo(linkData.target.x! + width / 2, linkData.target.y! + height / 2)
-        .stroke({ alpha: l.alpha, width: 1, color: l.color })
-    }
-
-    tweens.forEach((t) => t.update(time))
-    app.renderer.render(stage)
-    requestAnimationFrame(animate)
-  }
-
-  requestAnimationFrame(animate)
-  return () => {
-    stopAnimation = true
-    app.destroy()
+  } catch (error) {
+    console.error('❌ Error loading graph data:', error)
+    container.innerHTML = `<div style="padding: 20px; color: red;">Error loading graph data: ${error.message}</div>`
+    return () => {}
   }
 }
 
@@ -656,6 +348,7 @@ let localGraphCleanups: (() => void)[] = []
 let globalGraphCleanups: (() => void)[] = []
 
 function cleanupLocalGraphs() {
+  console.log('🧹 Cleaning up local graphs')
   for (const cleanup of localGraphCleanups) {
     cleanup()
   }
@@ -663,6 +356,7 @@ function cleanupLocalGraphs() {
 }
 
 function cleanupGlobalGraphs() {
+  console.log('🧹 Cleaning up global graphs')
   for (const cleanup of globalGraphCleanups) {
     cleanup()
   }
@@ -670,19 +364,30 @@ function cleanupGlobalGraphs() {
 }
 
 document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
+  console.log('🧭 Navigation event triggered for:', e.detail.url)
+  
   const slug = e.detail.url
   addToVisited(simplifySlug(slug))
 
   async function renderLocalGraph() {
+    console.log('🏠 Rendering local graphs...')
     cleanupLocalGraphs()
     const localGraphContainers = document.getElementsByClassName("graph-container")
+    console.log('📦 Found', localGraphContainers.length, 'local graph containers')
+    
     for (const container of localGraphContainers) {
-      localGraphCleanups.push(await renderGraph(container as HTMLElement, slug))
+      try {
+        localGraphCleanups.push(await renderGraph(container as HTMLElement, slug))
+      } catch (error) {
+        console.error('❌ Failed to render local graph:', error)
+      }
     }
   }
 
   await renderLocalGraph()
+  
   const handleThemeChange = () => {
+    console.log('🎨 Theme changed, re-rendering graphs...')
     void renderLocalGraph()
   }
 
@@ -692,7 +397,11 @@ document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
   })
 
   const containers = [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+  console.log('📦 Found global graph containers:', containers.length)
+  
   async function renderGlobalGraph() {
+    console.log('🌍 Rendering global graphs...')
+    cleanupGlobalGraphs()
     const slug = getFullSlug(window)
     for (const container of containers) {
       container.classList.add("active")
@@ -702,22 +411,57 @@ document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
       }
 
       const graphContainer = container.querySelector(".global-graph-container") as HTMLElement
+      
+      // Use the existing registerEscapeHandler - it handles both escape key and click-outside
+      // The container (.global-graph-outer) is the backdrop that should be clickable
       registerEscapeHandler(container, hideGlobalGraph)
+      console.log('⌨️ Escape handler registered for global graph')
+      
       if (graphContainer) {
-        globalGraphCleanups.push(await renderGraph(graphContainer, slug))
+        try {
+          const cleanup = await renderGraph(graphContainer, slug)
+          globalGraphCleanups.push(cleanup)
+        } catch (error) {
+          console.error('❌ Failed to render global graph:', error)
+        }
       }
     }
   }
 
   function hideGlobalGraph() {
+    console.log('🙈 Hiding global graphs...')
+    
+    // First cleanup the graph instances
     cleanupGlobalGraphs()
-    for (const container of containers) {
+    
+    // Get fresh container references (in case DOM changed)
+    const currentContainers = [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+    console.log('📦 Current containers for hiding:', currentContainers.length)
+    
+    // Then hide the overlay containers
+    for (let i = 0; i < currentContainers.length; i++) {
+      const container = currentContainers[i]
+      console.log(`🙈 Processing container ${i}:`, {
+        hasActiveClass: container.classList.contains('active'),
+        display: getComputedStyle(container).display,
+        classList: Array.from(container.classList)
+      })
+      
       container.classList.remove("active")
+      
+      console.log(`🙈 After removing active class:`, {
+        hasActiveClass: container.classList.contains('active'),
+        display: getComputedStyle(container).display,
+        classList: Array.from(container.classList)
+      })
+      
       const sidebar = container.closest(".sidebar") as HTMLElement
       if (sidebar) {
         sidebar.style.zIndex = ""
       }
     }
+    
+    console.log('✅ Global graph hidden successfully')
   }
 
   async function shortcutHandler(e: HTMLElementEventMap["keydown"]) {

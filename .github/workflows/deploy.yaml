@@ -35,12 +35,21 @@ jobs:
         run: |
           pip install networkx pyyaml omegaconf loguru fire numpy
           python -m scripts.colorclass_processor process_vault content/vault
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+  
+      - name: Regenerate package-lock.json
+        run: |
+          if [ -f "package-lock.json" ]; then
+            rm -f package-lock.json
+          fi
+          npm install --package-lock-only --no-audit
+
       - name: Install Dependencies
-        run: npm ci
+        #run: npm ci
+        run: npm install --prefer-offline
       - name: Build Quartz
         run: npx quartz build
       - name: Upload artifact

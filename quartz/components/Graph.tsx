@@ -1,3 +1,4 @@
+// quartz/components/Graph.tsx
 import { QuartzComponent, QuartzComponentConstructor, QuartzComponentProps } from "./types"
 // @ts-ignore
 import script from "./scripts/graph.inline"
@@ -5,57 +6,84 @@ import style from "./styles/graph.scss"
 import { i18n } from "../i18n"
 import { classNames } from "../util/lang"
 
-export interface D3Config {
-  drag: boolean
-  zoom: boolean
-  depth: number
-  scale: number
-  repelForce: number
-  centerForce: number
+export interface CosmographConfig {
+  // Simulation settings
+  repulsion: number
+  linkSpring: number
   linkDistance: number
-  fontSize: number
-  opacityScale: number
+  friction: number
+  gravity: number
+  
+  // Rendering settings
+  nodeSize: number
+  nodeColor: string
+  linkColor: string
+  linkWidth: number
+  
+  // Display settings
+  backgroundColor: string
+  showDynamicLabels: boolean
+  
+  // Data filtering
   removeTags: string[]
   showTags: boolean
+  depth: number
   focusOnHover?: boolean
-  enableRadial?: boolean
 }
 
 interface GraphOptions {
-  localGraph: Partial<D3Config> | undefined
-  globalGraph: Partial<D3Config> | undefined
+  localGraph: Partial<CosmographConfig> | undefined
+  globalGraph: Partial<CosmographConfig> | undefined
 }
 
 const defaultOptions: GraphOptions = {
   localGraph: {
-    drag: true,
-    zoom: true,
-    depth: 2,
-    scale: 1.1,
-    repelForce: 0.9,
-    centerForce: 0.1,
+    // Simulation physics
+    repulsion: 0.5,
+    linkSpring: 1.0,
     linkDistance: 10,
-    fontSize: 0.6,
-    opacityScale: 1,
+    friction: 0.85,
+    gravity: 0.1,
+    
+    // Visual appearance
+    nodeSize: 4,
+    nodeColor: '#8b5cf6',
+    linkColor: '#64748b',
+    linkWidth: 1,
+    
+    // Display
+    backgroundColor: 'transparent',
+    showDynamicLabels: true,
+    
+    // Data filtering
+    depth: 2,
     showTags: false,
     removeTags: [],
     focusOnHover: false,
-    enableRadial: false,
   },
   globalGraph: {
-    drag: true,
-    zoom: true,
+    // Simulation physics
+    repulsion: 0.3,
+    linkSpring: 0.8,
+    linkDistance: 20,
+    friction: 0.9,
+    gravity: 0.05,
+    
+    // Visual appearance
+    nodeSize: 3,
+    nodeColor: '#8b5cf6',
+    linkColor: '#94a3b8',
+    linkWidth: 1,
+    
+    // Display
+    backgroundColor: 'transparent',
+    showDynamicLabels: true,
+    
+    // Data filtering
     depth: -1,
-    scale: 0.5,
-    repelForce: 0.9,
-    centerForce: 0.1,
-    linkDistance: 10,
-    fontSize: 0.6,
-    opacityScale: 1,
     showTags: false,
     removeTags: [],
     focusOnHover: true,
-    enableRadial: false,
   },
 }
 
@@ -63,6 +91,7 @@ export default ((opts?: Partial<GraphOptions>) => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
     const localGraph = { ...defaultOptions.localGraph, ...opts?.localGraph }
     const globalGraph = { ...defaultOptions.globalGraph, ...opts?.globalGraph }
+    
     return (
       <div class={classNames(displayClass, "graph")}>
         <h3>{i18n(cfg.locale).components.graph.title}</h3>
