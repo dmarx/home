@@ -197,11 +197,11 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
       const cosmograph = new Cosmograph(graphDiv, {
         // Simulation settings - use simpler values for testing
         simulation: {
-          repulsion: 1.0,  // Increased for better separation
+          repulsion: 2.0,  // Increased for better separation
           linkSpring: 0.5,
           linkDistance: 50, // Increased for visibility
-          friction: 0.8,
-          gravity: 0.2,    // Increased to center nodes
+          friction: 0.3,
+          gravity: 0.05,    // Increased to center nodes
         },
         
         // Essential rendering settings
@@ -225,6 +225,7 @@ async function renderGraph(container: HTMLElement, fullSlug: FullSlug): Promise<
         
         // Labels
         showDynamicLabels: true,
+        enableDrag: true,
         
         // Initial view settings - CRITICAL for visibility
         fitViewOnInit: true,
