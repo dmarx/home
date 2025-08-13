@@ -23,6 +23,7 @@ export interface CosmographConfig {
   // Display settings
   backgroundColor: string
   showDynamicLabels: boolean
+  scalePointsOnZoom: boolean
   
   // Data filtering
   removeTags: string[]
@@ -78,6 +79,7 @@ const defaultOptions: GraphOptions = {
     // Display
     backgroundColor: 'transparent',
     showDynamicLabels: true,
+    scalePointsOnZoom: true,
     
     // Data filtering
     depth: -1,
