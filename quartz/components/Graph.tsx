@@ -23,7 +23,6 @@ export interface CosmographConfig {
   // Display settings
   backgroundColor: string
   showDynamicLabels: boolean
-  scalePointsOnZoom: boolean
   
   // Data filtering
   removeTags: string[]
@@ -47,7 +46,7 @@ const defaultOptions: GraphOptions = {
     gravity: 0.1,
     
     // Visual appearance
-    nodeSize: 4,
+    nodeSize: 1,
     nodeColor: '#8b5cf6',
     linkColor: '#64748b',
     linkWidth: 1,
@@ -64,14 +63,14 @@ const defaultOptions: GraphOptions = {
   },
   globalGraph: {
     // Simulation physics
-    repulsion: 0.3,
-    linkSpring: 0.8,
-    linkDistance: 20,
-    friction: 0.9,
-    gravity: 0.05,
+    repulsion: 0.9,
+    linkSpring: 0.6,
+    linkDistance: 10,
+    friction: 0.5,
+    gravity: 0.01,
     
     // Visual appearance
-    nodeSize: 3,
+    nodeSize: 1,
     nodeColor: '#8b5cf6',
     linkColor: '#94a3b8',
     linkWidth: 1,
@@ -79,7 +78,6 @@ const defaultOptions: GraphOptions = {
     // Display
     backgroundColor: 'transparent',
     showDynamicLabels: true,
-    scalePointsOnZoom: true,
     
     // Data filtering
     depth: -1,
