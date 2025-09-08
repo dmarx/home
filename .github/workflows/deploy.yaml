@@ -19,13 +19,13 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Fetch all history for git info
           submodules: true # populate vault content
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           #cache: 'pip'
@@ -36,7 +36,7 @@ jobs:
           pip install networkx pyyaml omegaconf loguru fire numpy
           python -m scripts.colorclass_processor process_vault content/vault
       
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Install Dependencies
@@ -44,7 +44,7 @@ jobs:
       - name: Build Quartz
         run: npx quartz build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: public
  
